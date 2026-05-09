@@ -46,8 +46,9 @@ TRAIL_PCT       = 0.025  # 트레일링 폭 2.5%
 TIGHT_TRAIL     = 0.015  # 분할 후 조인 1.5%
 DAILY_LIMIT_PCT = -0.05
 MIN_KRW         = 5001
-COOLDOWN_SEC    = 120    # 청산 후 재진입 대기 (초)
-MIN_COIN_PRICE  = 10     # 최소 코인 단가 (원) - 저가 코인 노이즈 제거
+COOLDOWN_SEC      = 120    # 청산 후 재진입 대기 (초)
+MIN_COIN_PRICE    = 10     # 최소 코인 단가 (원) - 저가 코인 노이즈 제거
+MAX_DAILY_TRADES  = 20     # 일일 최대 거래 횟수
 MIN_TRADE_KRW_PER_MIN = 1_000_000  # 분당 거래대금 최소 100만원
 BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
 
@@ -480,6 +481,11 @@ def run():
 
             if daily_pnl / capital <= daily_limit:
                 log.warning("[ALT] 일일 손실 한도 - 매매 중단")
+                time.sleep(300)
+                continue
+
+            if daily_trades >= MAX_DAILY_TRADES:
+                log.warning(f"[ALT] 일일 거래 한도 {MAX_DAILY_TRADES}건 도달 - 대기")
                 time.sleep(300)
                 continue
 
