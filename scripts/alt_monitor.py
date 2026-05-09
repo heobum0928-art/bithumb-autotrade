@@ -48,9 +48,11 @@ DAILY_LIMIT_PCT = -0.05
 MIN_KRW         = 5001
 COOLDOWN_SEC      = 120    # 청산 후 재진입 대기 (초)
 MIN_COIN_PRICE    = 10     # 최소 코인 단가 (원) - 저가 코인 노이즈 제거
-MAX_DAILY_TRADES  = 20     # 일일 최대 거래 횟수
+MAX_DAILY_TRADES  = 30     # 일일 최대 거래 횟수
 MIN_TRADE_KRW_PER_MIN = 1_000_000  # 분당 거래대금 최소 100만원
 BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
+OB_BID_RATIO    = 1.5    # 호가 매수잔량 / 매도잔량 최소 비율
+TICK_BUY_RATIO  = 0.60   # 최근 체결 중 매수 비율 최소치
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 
@@ -236,6 +238,41 @@ def get_price(client: BithumbClient, coin: str) -> float:
         return float(client.get_ticker(coin)["closing_price"])
     except Exception:
         return 0.0
+
+
+def check_orderbook(client: BithumbClient, coin: str) -> bool:
+    """상위 5호가 매수잔량 KRW >= 매도잔량 KRW * OB_BID_RATIO 이어야 진입 허용."""
+    try:
+        ob = client.get_orderbook(coin)
+        bids = ob.get("bids", [])[:5]
+        asks = ob.get("asks", [])[:5]
+        if not bids or not asks:
+            return True
+        bid_total = sum(float(b["quantity"]) * float(b["price"]) for b in bids)
+        ask_total = sum(float(a["quantity"]) * float(a["price"]) for a in asks)
+        if ask_total <= 0:
+            return True
+        ratio = bid_total / ask_total
+        log.info(f"[{coin}] 호가불균형 매수/매도={ratio:.2f} (기준 {OB_BID_RATIO})")
+        return ratio >= OB_BID_RATIO
+    except Exception as e:
+        log.debug(f"[{coin}] 호가 조회 실패: {e}")
+        return True  # 오류 시 통과
+
+
+def check_tick_ratio(client: BithumbClient, coin: str) -> bool:
+    """최근 20건 체결 중 매수 비율 >= TICK_BUY_RATIO 이어야 진입 허용."""
+    try:
+        txs = client.get_transaction_history(coin, count=20)
+        if not txs:
+            return True
+        buys = sum(1 for t in txs if t.get("type") == "bid")
+        ratio = buys / len(txs)
+        log.info(f"[{coin}] 체결강도 매수비율={ratio*100:.0f}% (기준 {TICK_BUY_RATIO*100:.0f}%)")
+        return ratio >= TICK_BUY_RATIO
+    except Exception as e:
+        log.debug(f"[{coin}] 체결강도 조회 실패: {e}")
+        return True  # 오류 시 통과
 
 
 # ── 주문 ──────────────────────────────────────────────────────────────────────
@@ -485,8 +522,9 @@ def run():
                 continue
 
             if daily_trades >= MAX_DAILY_TRADES:
-                log.warning(f"[ALT] 일일 거래 한도 {MAX_DAILY_TRADES}건 도달 - 대기")
-                time.sleep(300)
+                log.warning(f"[ALT] 일일 거래 한도 {MAX_DAILY_TRADES}건 도달 - 매매 중단")
+                notify.send(f"<b>[한도 도달]</b> 오늘 {MAX_DAILY_TRADES}건 거래 완료. 내일까지 매매 중단.", force=True)
+                time.sleep(3600)
                 continue
 
             # 가격 스냅샷 갱신 (포지션 있어도 계속 수집)
@@ -546,6 +584,16 @@ def run():
                 f"가격={best['price_chg']*100:+.1f}% | "
                 f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
+
+            # ── 호가 불균형 + 체결강도 2차 확인 ─────────────────────────────────
+            if not check_orderbook(client, coin):
+                log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
+                time.sleep(SCAN_SEC)
+                continue
+            if not check_tick_ratio(client, coin):
+                log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
+                time.sleep(SCAN_SEC)
+                continue
 
             avail   = get_available_krw(client)
             buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
