@@ -2,6 +2,7 @@
 import logging
 import requests
 import yaml
+from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -16,11 +17,27 @@ def _get_cfg() -> dict:
     return _cfg
 
 
-def send(text: str) -> bool:
+def _is_quiet_hours() -> bool:
+    cfg = _get_cfg().get("telegram", {})
+    qs = cfg.get("quiet_start", -1)
+    qe = cfg.get("quiet_end", -1)
+    if qs < 0 or qe < 0:
+        return False
+    h = datetime.now().hour
+    if qs <= qe:
+        return qs <= h < qe
+    return h >= qs or h < qe  # 자정 걸치는 경우
+
+
+def send(text: str, force: bool = False) -> bool:
+    """Send Telegram message. Skipped during quiet hours unless force=True."""
     cfg = _get_cfg().get("telegram", {})
     token = cfg.get("bot_token", "")
     chat_id = cfg.get("chat_id", "")
     if not token or not chat_id:
+        return False
+    if not force and _is_quiet_hours():
+        log.debug("[Telegram] 무음 시간대 — 전송 생략")
         return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -63,4 +80,4 @@ def notify_daily(total_pnl: float, count: int, win_rate: float) -> None:
 
 
 def notify_error(msg: str) -> None:
-    send(f"<b>[오류]</b> {msg}")
+    send(f"<b>[오류]</b> {msg}", force=True)  # 오류는 무음 무시
