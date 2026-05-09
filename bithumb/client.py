@@ -166,3 +166,12 @@ class BithumbClient:
         """Return coin symbols from API 2.0 market list (e.g. {'BTC', 'ETH', ...})."""
         markets = self.get_markets()
         return {m["market"].split("-")[1] for m in markets if m["market"].startswith("KRW-")}
+
+    def get_candles(self, market: str, unit: int = 5, count: int = 6) -> list[dict]:
+        """Get minute candles. unit: 1/3/5/10/15/30/60/240. Returns newest-first."""
+        resp = self._session.get(
+            f"{BASE_URL}/v1/candles/minutes/{unit}",
+            params={"market": market.upper(), "count": count},
+        )
+        resp.raise_for_status()
+        return resp.json()
