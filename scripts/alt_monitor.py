@@ -213,9 +213,27 @@ def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
         return None
 
 
+def get_coin_balance(client: BithumbClient, coin: str) -> float:
+    """실제 거래소 잔고 조회 — 소수점 오차 방지."""
+    try:
+        for a in client.get_accounts():
+            if a["currency"] == coin.upper():
+                return float(a["balance"])
+    except Exception:
+        pass
+    return 0.0
+
+
 def do_sell(client: BithumbClient, pos: dict, volume: float, reason: str) -> float:
     coin = pos["coin"]
-    log.info(f"[{coin}] {reason} - 매도 {volume:.8f}")
+    # 실제 잔고 확인 후 min(요청량, 실제잔고) 사용 — 소수점 오차 방지
+    actual_bal = get_coin_balance(client, coin)
+    if actual_bal < volume * 0.995:
+        volume = actual_bal
+    if volume <= 0:
+        log.error(f"[{coin}] 매도 수량 0 — 스킵")
+        return 0.0
+    log.info(f"[{coin}] {reason} - 매도 {volume:.8f} (잔고={actual_bal:.8f})")
     for attempt in range(3):  # 최대 3회 재시도
         try:
             r     = client.market_sell(pos["market"], volume)
