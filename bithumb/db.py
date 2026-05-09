@@ -1,0 +1,135 @@
+"""
+Trade database — SQLite, one row per completed trade.
+Provides write (log_trade) and read (get_trades, get_stats) interfaces.
+"""
+import sqlite3
+import logging
+from datetime import datetime, date, timedelta
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+DB_PATH = Path("data/trades.db")
+
+CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS trades (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    date          TEXT    NOT NULL,
+    coin          TEXT    NOT NULL,
+    market        TEXT    NOT NULL,
+    entry_price   REAL    NOT NULL,
+    exit_price    REAL,
+    volume        REAL    NOT NULL,
+    cost_krw      REAL    NOT NULL,
+    received_krw  REAL,
+    pnl_krw       REAL,
+    pnl_pct       REAL,
+    exit_reason   TEXT,
+    hold_seconds  INTEGER,
+    entered_at    TEXT    NOT NULL,
+    exited_at     TEXT
+);
+CREATE TABLE IF NOT EXISTS daily_params (
+    date          TEXT    PRIMARY KEY,
+    entry_delay   INTEGER,
+    min_volume    REAL,
+    take_profit   REAL,
+    stop_loss     REAL,
+    entry_ratio   REAL,
+    note          TEXT
+);
+"""
+
+
+def _conn() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(exist_ok=True)
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def init_db() -> None:
+    with _conn() as con:
+        con.executescript(CREATE_SQL)
+    log.debug("DB initialised")
+
+
+def log_trade(
+    coin: str,
+    market: str,
+    entry_price: float,
+    exit_price: float,
+    volume: float,
+    cost_krw: float,
+    received_krw: float,
+    exit_reason: str,
+    entered_at: datetime,
+    exited_at: datetime,
+) -> None:
+    pnl_krw = received_krw - cost_krw
+    pnl_pct = pnl_krw / cost_krw * 100 if cost_krw else 0
+    hold_sec = int((exited_at - entered_at).total_seconds())
+    row = (
+        exited_at.strftime("%Y-%m-%d"),
+        coin, market,
+        entry_price, exit_price,
+        volume, cost_krw, received_krw,
+        pnl_krw, pnl_pct,
+        exit_reason, hold_sec,
+        entered_at.isoformat(), exited_at.isoformat(),
+    )
+    with _conn() as con:
+        con.execute(
+            """INSERT INTO trades
+               (date,coin,market,entry_price,exit_price,volume,cost_krw,
+                received_krw,pnl_krw,pnl_pct,exit_reason,hold_seconds,
+                entered_at,exited_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            row,
+        )
+    log.info(f"[DB] 거래 저장: {coin} PnL={pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%) [{exit_reason}]")
+
+
+def log_params(params: dict) -> None:
+    today = date.today().isoformat()
+    with _conn() as con:
+        con.execute(
+            """INSERT OR REPLACE INTO daily_params
+               (date,entry_delay,min_volume,take_profit,stop_loss,entry_ratio,note)
+               VALUES (:date,:entry_delay,:min_volume,:take_profit,:stop_loss,:entry_ratio,:note)""",
+            {"date": today, **params},
+        )
+
+
+def get_trades(days: int = 7) -> list[dict]:
+    since = (date.today() - timedelta(days=days)).isoformat()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM trades WHERE date >= ? ORDER BY entered_at", (since,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_stats(days: int = 7) -> dict:
+    trades = get_trades(days)
+    if not trades:
+        return {"count": 0}
+    wins = [t for t in trades if t["pnl_krw"] > 0]
+    losses = [t for t in trades if t["pnl_krw"] <= 0]
+    total_pnl = sum(t["pnl_krw"] for t in trades)
+    avg_hold = sum(t["hold_seconds"] for t in trades) / len(trades)
+    sl_hits = [t for t in trades if "손절" in (t["exit_reason"] or "")]
+    tp_hits = [t for t in trades if "익절" in (t["exit_reason"] or "")]
+    return {
+        "count":       len(trades),
+        "win_count":   len(wins),
+        "loss_count":  len(losses),
+        "win_rate":    len(wins) / len(trades),
+        "total_pnl":   total_pnl,
+        "avg_pnl":     total_pnl / len(trades),
+        "avg_hold_sec": avg_hold,
+        "sl_count":    len(sl_hits),
+        "tp_count":    len(tp_hits),
+        "avg_win_pnl": sum(t["pnl_krw"] for t in wins) / max(len(wins), 1),
+        "avg_loss_pnl": sum(t["pnl_krw"] for t in losses) / max(len(losses), 1),
+    }

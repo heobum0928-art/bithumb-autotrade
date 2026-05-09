@@ -1,0 +1,7 @@
+requests==2.31.0
+pyyaml==6.0.1
+PyJWT==2.8.0
+python-dotenv==1.0.0
+schedule==1.2.1
+websocket-client==1.7.0
+python-telegram-bot==20.7

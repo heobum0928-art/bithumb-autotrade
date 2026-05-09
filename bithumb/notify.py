@@ -1,0 +1,66 @@
+"""Telegram notification helper."""
+import logging
+import requests
+import yaml
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+_cfg = None
+
+
+def _get_cfg() -> dict:
+    global _cfg
+    if _cfg is None:
+        _cfg = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    return _cfg
+
+
+def send(text: str) -> bool:
+    cfg = _get_cfg().get("telegram", {})
+    token = cfg.get("bot_token", "")
+    chat_id = cfg.get("chat_id", "")
+    if not token or not chat_id:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=5)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        log.warning(f"[Telegram] 전송 실패: {e}")
+        return False
+
+
+def notify_detected(coin: str, first_price: float) -> None:
+    send(f"<b>[신규 상장 감지]</b> {coin}/KRW\n첫 체결가: <b>{first_price:,.0f}원</b>")
+
+
+def notify_buy(coin: str, entry_price: float, volume: float, cost_krw: float) -> None:
+    send(
+        f"<b>[매수 체결]</b> {coin}/KRW\n"
+        f"단가: {entry_price:,.0f}원\n"
+        f"수량: {volume:.6f}\n"
+        f"투자금: {cost_krw:,.0f}원"
+    )
+
+
+def notify_sell(coin: str, pnl_krw: float, pnl_pct: float, reason: str) -> None:
+    emoji = "+" if pnl_krw >= 0 else "-"
+    send(
+        f"<b>[매도 체결]</b> {coin}/KRW\n"
+        f"사유: {reason}\n"
+        f"손익: <b>{pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%)</b>"
+    )
+
+
+def notify_daily(total_pnl: float, count: int, win_rate: float) -> None:
+    send(
+        f"<b>[일일 리포트]</b>\n"
+        f"거래: {count}건 | 승률: {win_rate*100:.1f}%\n"
+        f"총 PnL: <b>{total_pnl:+,.0f}원</b>"
+    )
+
+
+def notify_error(msg: str) -> None:
+    send(f"<b>[오류]</b> {msg}")
