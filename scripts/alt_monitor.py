@@ -1,21 +1,20 @@
 """
-Altcoin Momentum Monitor  (Strategy D)
+Altcoin Momentum Monitor  (Strategy D - Aggressive Real-time)
 
-Signal conditions (both must be true):
-  1. Current 5-min candle price change >= +3%  (price_thresh)
-  2. Current 5-min candle volume >= 5x avg of previous 5 candles  (volume_mult)
+Signal:
+  - 60초 전 대비 현재가 +2% 이상
+  - 최근 거래 속도가 직전 대비 3배 이상
+  (캔들 없이 ticker/ALL 10초마다 폴링 -> 메모리 가격 이력으로 계산)
 
-Flow:
-  Every 60s -> get all KRW tickers -> pre-filter active coins
-           -> check 5-min candles -> detect signal
-           -> market buy -> trailing stop exit
+Entry: 가용 KRW 30%, TP +4%, 트레일 2.5%
 
-Run: python scripts/alt_monitor.py  (alongside auto_trade.py)
+Run: python scripts/alt_monitor.py
 """
 import sys
 import time
 import logging
 import yaml
+from collections import deque
 from datetime import datetime, date
 from pathlib import Path
 
@@ -36,29 +35,117 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── 전략 파라미터 ──────────────────────────────────────────────────────────────
-SCAN_INTERVAL   = 60     # 전체 스캔 주기 (초)
-PRICE_THRESH    = 0.03   # 5분봉 가격 변화 최소 +3%
-VOLUME_MULT     = 5.0    # 현재봉 거래대금 >= 이전 5봉 평균의 5배
-CANDLE_COUNT    = 6      # 봉 개수 (1 현재 + 5 이전)
-ALT_ENTRY_RATIO = 0.25   # 가용 KRW의 25% 진입
-TP_HALF         = 0.05   # 1차 익절 +5%
-TRAIL_PCT       = 0.03   # 트레일링 폭 3%
-TIGHT_TRAIL     = 0.018  # 분할 후 조인 트레일 1.8%
-DAILY_LIMIT_PCT = -0.05  # 일일 손실 한도
-MIN_KRW         = 5001   # 최소 주문 금액
-PRE_FILTER_24H  = 2.0    # 24H 변동률 사전 필터 (절대값 %)
+SCAN_SEC        = 10     # 폴링 주기 (초)
+WINDOW_SEC      = 60     # 가격 변화 측정 윈도우 (초)
+PRICE_THRESH    = 0.02   # +2% 이상
+VOLUME_MULT     = 3.0    # 최근 거래속도 3배 이상
+ALT_ENTRY_RATIO = 0.30   # 가용 KRW의 30%
+TP_HALF         = 0.04   # 1차 익절 +4%
+TRAIL_PCT       = 0.025  # 트레일링 폭 2.5%
+TIGHT_TRAIL     = 0.015  # 분할 후 조인 1.5%
+DAILY_LIMIT_PCT = -0.05
+MIN_KRW         = 5001
+COOLDOWN_SEC    = 120    # 청산 후 재진입 대기 (초)
+MIN_COIN_PRICE  = 10     # 최소 코인 단가 (원) — 저가 코인 노이즈 제거
 
-# 대형 코인 제외 (변동성 낮고 경쟁 봇 많음)
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 
 
-# ── 설정 로드 ──────────────────────────────────────────────────────────────────
+# ── 실시간 가격 추적기 ─────────────────────────────────────────────────────────
+
+class PriceTracker:
+    """
+    ticker/ALL 폴링 결과를 메모리에 누적.
+    각 코인별로 (timestamp, price, acc_vol_24H) 스냅샷 deque 유지.
+    """
+    MAXLEN = 30  # 최대 300초치 (10초 * 30)
+
+    def __init__(self):
+        self._hist: dict[str, deque] = {}
+
+    def update(self, ticker_all: dict) -> None:
+        now = time.time()
+        for coin, data in ticker_all.items():
+            if coin == "date":
+                continue
+            try:
+                price   = float(data["closing_price"])
+                acc_vol = float(data["acc_trade_value_24H"])
+                if price <= 0:
+                    continue
+                if coin not in self._hist:
+                    self._hist[coin] = deque(maxlen=self.MAXLEN)
+                self._hist[coin].append((now, price, acc_vol))
+            except Exception:
+                continue
+
+    def get_signal(self, coin: str) -> dict | None:
+        hist = self._hist.get(coin)
+        if not hist or len(hist) < 4:
+            return None
+
+        snaps     = list(hist)
+        now_ts, now_price, now_vol = snaps[-1]
+
+        # ── 가격 변화: WINDOW_SEC 전 스냅샷과 비교 ──────────────────────────
+        target_ts = now_ts - WINDOW_SEC
+        old_snap  = snaps[0]
+        for s in snaps:
+            if s[0] <= target_ts:
+                old_snap = s
+
+        old_ts, old_price, old_vol = old_snap
+        elapsed = now_ts - old_ts
+        if elapsed < 20 or old_price <= 0:
+            return None
+
+        if now_price < MIN_COIN_PRICE:
+            return None  # 저가 코인 제외 (노이즈 심함)
+
+        price_chg = (now_price - old_price) / old_price
+        if price_chg < PRICE_THRESH:
+            return None
+
+        # ── 거래 속도: 후반부 vs 전반부 비교 ────────────────────────────────
+        mid    = len(snaps) // 2
+        recent = snaps[mid:]
+        older  = snaps[:mid]
+
+        if len(recent) < 2 or len(older) < 2:
+            return None
+
+        r_vol  = recent[-1][2] - recent[0][2]
+        r_time = max(recent[-1][0] - recent[0][0], 1)
+        o_vol  = older[-1][2]  - older[0][2]
+        o_time = max(older[-1][0]  - older[0][0],  1)
+
+        if o_vol <= 0:
+            return None
+
+        r_rate   = r_vol / r_time
+        o_rate   = o_vol / o_time
+        vol_mult = r_rate / o_rate if o_rate > 0 else 0
+
+        if vol_mult < VOLUME_MULT:
+            return None
+
+        return {
+            "coin":      coin,
+            "price_chg": price_chg,
+            "vol_mult":  vol_mult,
+            "price":     now_price,
+            "elapsed":   elapsed,
+        }
+
+    def coins(self) -> list[str]:
+        return list(self._hist.keys())
+
+
+# ── 설정 / 잔고 ───────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
     return yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
 
-
-# ── 잔고 / 가격 ───────────────────────────────────────────────────────────────
 
 def get_available_krw(client: BithumbClient) -> float:
     for a in client.get_accounts():
@@ -72,72 +159,6 @@ def get_price(client: BithumbClient, coin: str) -> float:
         return float(client.get_ticker(coin)["closing_price"])
     except Exception:
         return 0.0
-
-
-# ── 신호 스캔 ─────────────────────────────────────────────────────────────────
-
-def scan_signals(client: BithumbClient, skip_coin: str = None) -> list[dict]:
-    """전체 KRW 마켓 스캔 → 모멘텀 신호 목록 반환 (강한 순 정렬)."""
-    signals = []
-
-    try:
-        ticker_all = client.get_ticker("ALL")
-    except Exception as e:
-        log.error(f"전체 시세 조회 실패: {e}")
-        return []
-
-    for coin, data in ticker_all.items():
-        if coin == "date":
-            continue
-        if coin in SKIP_COINS:
-            continue
-        if skip_coin and coin == skip_coin:
-            continue
-
-        try:
-            rate_24h = abs(float(data.get("fluctate_rate_24H", 0)))
-            if rate_24h < PRE_FILTER_24H:
-                continue  # 오늘 움직임 없는 코인 제외
-
-            candles = client.get_candles(f"KRW-{coin}", unit=5, count=CANDLE_COUNT)
-            if len(candles) < 2:
-                continue
-
-            cur  = candles[0]
-            prev = candles[1:]
-
-            open_p  = cur["opening_price"]
-            trade_p = cur["trade_price"]
-            if open_p <= 0:
-                continue
-
-            price_chg = (trade_p - open_p) / open_p
-            if price_chg < PRICE_THRESH:
-                continue
-
-            cur_vol  = cur["candle_acc_trade_price"]
-            avg_vol  = sum(c["candle_acc_trade_price"] for c in prev) / len(prev)
-            if avg_vol <= 0 or cur_vol < avg_vol * VOLUME_MULT:
-                continue
-
-            vol_mult = cur_vol / avg_vol
-            signals.append({
-                "coin":        coin,
-                "market":      f"KRW-{coin}",
-                "price_chg":   price_chg,
-                "vol_mult":    vol_mult,
-                "price":       trade_p,
-            })
-            log.info(
-                f"  [신호] {coin} | 가격변화={price_chg*100:+.1f}% "
-                f"| 거래량배수={vol_mult:.1f}x | 현재={trade_p:,.0f}원"
-            )
-        except Exception:
-            continue
-
-    # 거래량 배수 높은 순 정렬
-    signals.sort(key=lambda x: x["vol_mult"], reverse=True)
-    return signals
 
 
 # ── 주문 ──────────────────────────────────────────────────────────────────────
@@ -158,14 +179,14 @@ def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
     market = f"KRW-{coin}"
     log.info(f"[{coin}] 시장가 매수 {buy_krw:,.0f}원")
     try:
-        r = client.market_buy(market, buy_krw)
+        r    = client.market_buy(market, buy_krw)
         uuid = r.get("uuid")
         if not uuid:
             log.error(f"[{coin}] UUID 없음")
             return None
         order = wait_for_order(client, uuid)
         if order.get("state") != "done":
-            log.warning(f"[{coin}] 매수 미체결 - 취소 시도")
+            log.warning(f"[{coin}] 매수 미체결 - 취소")
             try:
                 client.cancel_order(uuid)
             except Exception:
@@ -176,16 +197,16 @@ def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
         fee   = float(order.get("paid_fee", 0))
         if vol <= 0:
             return None
-        entry_price = funds / vol
-        log.info(f"[{coin}] 매수 체결 | 수량={vol:.8f} 단가={entry_price:,.0f}원")
-        notify.notify_buy(coin, entry_price, vol, funds + fee)
+        entry = funds / vol
+        log.info(f"[{coin}] 매수 체결 | 수량={vol:.8f} 단가={entry:,.0f}원")
+        notify.notify_buy(coin, entry, vol, funds + fee)
         return {
-            "coin":       coin,
-            "market":     market,
-            "volume":     vol,
-            "entry_price": entry_price,
-            "cost":       funds + fee,
-            "entered_at": datetime.now(),
+            "coin":        coin,
+            "market":      market,
+            "volume":      vol,
+            "entry_price": entry,
+            "cost":        funds + fee,
+            "entered_at":  datetime.now(),
         }
     except Exception as e:
         log.error(f"[{coin}] 매수 실패: {e}")
@@ -193,47 +214,50 @@ def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
 
 
 def do_sell(client: BithumbClient, pos: dict, volume: float, reason: str) -> float:
-    coin   = pos["coin"]
-    market = pos["market"]
+    coin = pos["coin"]
     log.info(f"[{coin}] {reason} - 매도 {volume:.8f}")
-    try:
-        r    = client.market_sell(market, volume)
-        uuid = r.get("uuid")
-        order = wait_for_order(client, uuid)
-        if order.get("state") != "done":
-            log.error(f"[{coin}] 매도 미체결! UUID={uuid}")
-            return 0.0
-        received = float(order.get("executed_funds", 0)) - float(order.get("paid_fee", 0))
-        log.info(f"[{coin}] 매도 체결 | 수령={received:,.0f}원 [{reason}]")
-        return received
-    except Exception as e:
-        log.error(f"[{coin}] 매도 실패: {e}")
-        return 0.0
+    for attempt in range(3):  # 최대 3회 재시도
+        try:
+            r     = client.market_sell(pos["market"], volume)
+            uuid  = r.get("uuid")
+            order = wait_for_order(client, uuid)
+            if order.get("state") != "done":
+                log.warning(f"[{coin}] 매도 미체결 재시도 {attempt+1}/3 UUID={uuid}")
+                time.sleep(2)
+                continue
+            received = float(order.get("executed_funds", 0)) - float(order.get("paid_fee", 0))
+            log.info(f"[{coin}] 매도 체결 | 수령={received:,.0f}원")
+            return received
+        except Exception as e:
+            log.warning(f"[{coin}] 매도 재시도 {attempt+1}/3: {e}")
+            time.sleep(3)
+    # 3회 모두 실패
+    notify.notify_error(f"{coin} 매도 실패! 수동 확인 필요 (사유: {reason})")
+    return -1.0  # -1 = 매도 실패 sentinel (0과 구분)
 
 
-# ── 트레일링 스탑 모니터 ──────────────────────────────────────────────────────
+# ── 트레일링 스탑 ─────────────────────────────────────────────────────────────
 
 def monitor_trailing(client: BithumbClient, pos: dict) -> float:
     coin       = pos["coin"]
     entry      = pos["entry_price"]
     total_vol  = pos["volume"]
     total_cost = pos["cost"]
-
-    highest  = entry
-    phase    = 1
-    sold_vol = 0.0
-    recv_krw = 0.0
-    half_vol = round(total_vol * 0.5, 8)
-    trail    = TRAIL_PCT
-    reason   = "unknown"
+    highest    = entry
+    phase      = 1
+    sold_vol   = 0.0
+    recv_krw   = 0.0
+    half_vol   = round(total_vol * 0.5, 8)
+    trail      = TRAIL_PCT
+    reason     = "unknown"
 
     log.info(
-        f"[{coin}] 트레일링 모니터 시작 | "
-        f"진입={entry:,.0f}원 1차익절={TP_HALF*100:.1f}% 트레일={trail*100:.1f}%"
+        f"[{coin}] 모니터링 시작 | "
+        f"진입={entry:,.0f}원 TP={TP_HALF*100:.0f}% 트레일={trail*100:.1f}%"
     )
 
     while True:
-        time.sleep(2)
+        time.sleep(3)
         current = get_price(client, coin)
         if current <= 0:
             continue
@@ -246,41 +270,39 @@ def monitor_trailing(client: BithumbClient, pos: dict) -> float:
         remaining  = total_vol - sold_vol
 
         log.info(
-            f"[{coin}] 현재={current:,.0f}원 PnL={pnl_pct*100:+.2f}% "
-            f"고점={highest:,.0f}원 스탑={trail_stop:,.0f}원 잔량={remaining:.8f}"
+            f"[{coin}] {current:,.0f}원  PnL={pnl_pct*100:+.2f}%  "
+            f"고점={highest:,.0f}원  스탑={trail_stop:,.0f}원"
         )
 
-        # 1차 익절
         if phase == 1 and pnl_pct >= TP_HALF:
             recv_krw += do_sell(client, pos, half_vol, f"1차익절 {pnl_pct*100:+.1f}%")
             sold_vol += half_vol
-            phase  = 2
-            trail  = TIGHT_TRAIL
-            highest = current
-            log.info(f"[{coin}] 2단계 - 트레일 조임: {trail*100:.1f}%")
+            phase    = 2
+            trail    = TIGHT_TRAIL
+            highest  = current
+            log.info(f"[{coin}] 2단계 - 트레일 {trail*100:.1f}%로 조임")
             continue
 
-        # 트레일링 스탑
         if current <= trail_stop:
-            reason = (
-                f"트레일링스탑 {pnl_pct*100:+.1f}% "
-                f"(고점 {highest:,.0f}원 → -{trail*100:.1f}%)"
-            )
+            reason = f"트레일링스탑 {pnl_pct*100:+.1f}% (고점 {highest:,.0f}원 -{trail*100:.1f}%)"
             recv_krw += do_sell(client, pos, total_vol - sold_vol, reason)
             break
 
+    # recv_krw == -1.0 이면 매도 실패 (sentinel)
+    if recv_krw < 0:
+        log.error(f"[{coin}] 매도 최종 실패 — 수동 처리 필요")
+        return 0.0  # PnL 집계에 반영 안 함
+
     pnl     = recv_krw - total_cost
     pnl_pct = pnl / total_cost * 100
-    log.info(f"[{coin}] 포지션 종료 | PnL={pnl:+,.0f}원 ({pnl_pct:+.2f}%)")
+    log.info(f"[{coin}] 종료 | PnL={pnl:+,.0f}원 ({pnl_pct:+.2f}%)")
     notify.notify_sell(coin, pnl, pnl_pct, reason)
 
-    exit_price = get_price(client, coin)
     try:
         log_trade(
             coin=coin, market=pos["market"],
-            entry_price=entry, exit_price=exit_price,
-            volume=total_vol, cost_krw=total_cost,
-            received_krw=recv_krw,
+            entry_price=entry, exit_price=get_price(client, coin),
+            volume=total_vol, cost_krw=total_cost, received_krw=recv_krw,
             exit_reason=reason,
             entered_at=pos["entered_at"], exited_at=datetime.now(),
         )
@@ -293,89 +315,112 @@ def monitor_trailing(client: BithumbClient, pos: dict) -> float:
 # ── 메인 루프 ─────────────────────────────────────────────────────────────────
 
 def run():
-    cfg        = load_config()
-    capital    = cfg["trading"]["capital_krw"]
+    cfg         = load_config()
+    capital     = cfg["trading"]["capital_krw"]
     daily_limit = cfg["trading"].get("daily_loss_limit_pct", DAILY_LIMIT_PCT)
 
     init_db()
-    client = BithumbClient()
+    client  = BithumbClient()
+    tracker = PriceTracker()
 
-    log.info("=== 알트코인 모멘텀 모니터 시작 (전략 D) ===")
+    log.info("=== ALT 모멘텀 봇 시작 [공격 모드] ===")
     log.info(
+        f"스캔={SCAN_SEC}s | 윈도우={WINDOW_SEC}s | "
         f"가격임계={PRICE_THRESH*100:.0f}% | 거래량배수={VOLUME_MULT:.0f}x | "
-        f"1차익절={TP_HALF*100:.0f}% | 트레일={TRAIL_PCT*100:.0f}%"
+        f"진입={ALT_ENTRY_RATIO*100:.0f}% | TP={TP_HALF*100:.0f}% | 트레일={TRAIL_PCT*100:.1f}%"
     )
 
-    daily_pnl  = 0.0
-    today      = date.today()
-    active_pos = None   # 현재 보유 포지션
+    daily_pnl    = 0.0
+    today        = date.today()
+    active_pos   = None
+    cooldown_end = 0.0
+    scan_count   = 0
 
     while True:
         try:
-            # 날짜 리셋
             if date.today() != today:
                 log.info(f"날짜 변경 | 전일 ALT PnL: {daily_pnl:+,.0f}원")
                 daily_pnl = 0.0
-                today = date.today()
+                today     = date.today()
 
-            # 일일 손실 한도
             if daily_pnl / capital <= daily_limit:
-                log.warning(f"[ALT] 일일 손실 한도 도달 - 매매 중단")
+                log.warning("[ALT] 일일 손실 한도 - 매매 중단")
                 time.sleep(300)
                 continue
 
-            # 포지션 보유 중이면 스캔 안 함 (모니터링은 별도 스레드 없이 순차 처리)
-            if active_pos is not None:
-                time.sleep(SCAN_INTERVAL)
+            # 가격 스냅샷 갱신 (포지션 있어도 계속 수집)
+            try:
+                ticker_all = client.get_ticker("ALL")
+                tracker.update(ticker_all)
+            except Exception as e:
+                log.error(f"시세 조회 실패: {e}")
+                time.sleep(SCAN_SEC)
                 continue
 
-            log.info(f"[스캔] 전체 KRW 마켓 모멘텀 신호 탐색...")
-            signals = scan_signals(client)
+            scan_count += 1
 
-            if not signals:
-                log.info("[스캔] 신호 없음")
-                time.sleep(SCAN_INTERVAL)
+            # 포지션 보유 중 or 쿨다운 중이면 신호 탐색 스킵
+            if active_pos is not None or time.time() < cooldown_end:
+                time.sleep(SCAN_SEC)
                 continue
 
-            # 가장 강한 신호 선택
-            best = signals[0]
+            # 매 6회(60초)마다 스캔 상태 로그
+            if scan_count % 6 == 0:
+                log.info(f"[스캔] {len(tracker.coins())}개 코인 추적 중...")
+
+            # 신호 탐색
+            found = []
+            for coin in tracker.coins():
+                if coin in SKIP_COINS:
+                    continue
+                sig = tracker.get_signal(coin)
+                if sig:
+                    found.append(sig)
+                    log.info(
+                        f"  [신호] {coin} | "
+                        f"가격={sig['price_chg']*100:+.1f}% | "
+                        f"거래량={sig['vol_mult']:.1f}x | "
+                        f"현재={sig['price']:,.0f}원"
+                    )
+
+            if not found:
+                time.sleep(SCAN_SEC)
+                continue
+
+            # 거래량 배수 기준 최강 신호 선택
+            best = max(found, key=lambda x: x["vol_mult"])
             coin = best["coin"]
             log.warning(
-                f"*** [모멘텀 신호] {coin} | "
-                f"가격변화={best['price_chg']*100:+.1f}% | "
-                f"거래량배수={best['vol_mult']:.1f}x ***"
+                f"*** [진입 신호] {coin} | "
+                f"가격={best['price_chg']*100:+.1f}% | "
+                f"거래량={best['vol_mult']:.1f}x ***"
             )
 
-            # 진입 금액 결정
             avail   = get_available_krw(client)
             buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
             if buy_krw < MIN_KRW:
                 log.warning(f"KRW 잔고 부족: {avail:,.0f}원")
-                time.sleep(SCAN_INTERVAL)
+                time.sleep(SCAN_SEC)
                 continue
 
-            # 매수
             pos = do_buy(client, coin, buy_krw)
             if not pos:
-                time.sleep(SCAN_INTERVAL)
+                time.sleep(SCAN_SEC)
                 continue
 
             active_pos = pos
-
-            # 트레일링 모니터 (블로킹 - 포지션 청산까지 루프 대기)
-            pnl = monitor_trailing(client, pos)
+            pnl        = monitor_trailing(client, pos)
             daily_pnl += pnl
-            active_pos = None
-            log.info(f"[ALT] 오늘 누적 PnL: {daily_pnl:+,.0f}원")
-
-            time.sleep(SCAN_INTERVAL)
+            active_pos  = None
+            cooldown_end = time.time() + COOLDOWN_SEC
+            log.info(f"[ALT] 오늘 누적 PnL: {daily_pnl:+,.0f}원 | 쿨다운 {COOLDOWN_SEC}s")
 
         except KeyboardInterrupt:
             log.info("종료 (Ctrl+C)")
             break
         except Exception as e:
             log.error(f"루프 오류: {e}")
-            time.sleep(SCAN_INTERVAL)
+            time.sleep(SCAN_SEC)
 
 
 if __name__ == "__main__":

@@ -54,20 +54,22 @@ def notify_detected(coin: str, first_price: float) -> None:
 
 
 def notify_buy(coin: str, entry_price: float, volume: float, cost_krw: float) -> None:
-    send(
+    send(  # 매수 체결은 무음 시간도 항상 전송
         f"<b>[매수 체결]</b> {coin}/KRW\n"
         f"단가: {entry_price:,.0f}원\n"
         f"수량: {volume:.6f}\n"
-        f"투자금: {cost_krw:,.0f}원"
+        f"투자금: {cost_krw:,.0f}원",
+        force=True,
     )
 
 
 def notify_sell(coin: str, pnl_krw: float, pnl_pct: float, reason: str) -> None:
-    emoji = "+" if pnl_krw >= 0 else "-"
-    send(
+    sign = "+" if pnl_krw >= 0 else ""
+    send(  # 매도 체결은 무음 시간도 항상 전송
         f"<b>[매도 체결]</b> {coin}/KRW\n"
         f"사유: {reason}\n"
-        f"손익: <b>{pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%)</b>"
+        f"손익: <b>{sign}{pnl_krw:,.0f}원 ({pnl_pct:+.2f}%)</b>",
+        force=True,
     )
 
 
