@@ -12,6 +12,7 @@ Run: python scripts/alt_monitor.py
 """
 import sys
 import time
+import json
 import logging
 import yaml
 from collections import deque
@@ -51,6 +52,27 @@ MIN_TRADE_KRW_PER_MIN = 1_000_000  # 분당 거래대금 최소 100만원
 BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
+
+STATE_FILE = Path("data/active_pos.json")
+
+
+def save_active(pos: dict, highest: float, phase: int, sold_vol: float, recv_krw: float, trail: float) -> None:
+    data = {**pos, "highest": highest, "phase": phase, "sold_vol": sold_vol, "recv_krw": recv_krw, "trail": trail}
+    STATE_FILE.parent.mkdir(exist_ok=True)
+    STATE_FILE.write_text(json.dumps(data, default=str), encoding="utf-8")
+
+
+def load_active() -> dict | None:
+    if not STATE_FILE.exists():
+        return None
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def clear_active() -> None:
+    STATE_FILE.unlink(missing_ok=True)
 
 
 # ── 실시간 가격 추적기 ─────────────────────────────────────────────────────────
@@ -322,22 +344,32 @@ def do_sell(client: BithumbClient, pos: dict, volume: float, reason: str) -> flo
 
 # ── 트레일링 스탑 ─────────────────────────────────────────────────────────────
 
-def monitor_trailing(client: BithumbClient, pos: dict) -> float:
+def monitor_trailing(client: BithumbClient, pos: dict, state: dict = None) -> float:
     coin       = pos["coin"]
-    entry      = pos["entry_price"]
-    total_vol  = pos["volume"]
-    total_cost = pos["cost"]
-    highest    = entry
-    phase      = 1
-    sold_vol   = 0.0
-    recv_krw   = 0.0
+    entry      = float(pos["entry_price"])
+    total_vol  = float(pos["volume"])
+    total_cost = float(pos["cost"])
     half_vol   = round(total_vol * 0.5, 8)
-    trail      = TRAIL_PCT
     reason     = "unknown"
 
+    if state:
+        highest  = float(state.get("highest", entry))
+        phase    = int(state.get("phase", 1))
+        sold_vol = float(state.get("sold_vol", 0.0))
+        recv_krw = float(state.get("recv_krw", 0.0))
+        trail    = float(state.get("trail", TRAIL_PCT))
+        log.info(f"[{coin}] 포지션 복구 | 진입={entry:,.2f}원 고점={highest:,.2f}원 단계={phase}")
+    else:
+        highest  = entry
+        phase    = 1
+        sold_vol = 0.0
+        recv_krw = 0.0
+        trail    = TRAIL_PCT
+
+    save_active(pos, highest, phase, sold_vol, recv_krw, trail)
     log.info(
         f"[{coin}] 모니터링 시작 | "
-        f"진입={entry:,.0f}원 TP={TP_HALF*100:.0f}% 트레일={trail*100:.1f}%"
+        f"진입={entry:,.2f}원 TP={TP_HALF*100:.0f}% 트레일={trail*100:.1f}%"
     )
 
     while True:
@@ -354,9 +386,10 @@ def monitor_trailing(client: BithumbClient, pos: dict) -> float:
         remaining  = total_vol - sold_vol
 
         log.info(
-            f"[{coin}] {current:,.0f}원  PnL={pnl_pct*100:+.2f}%  "
-            f"고점={highest:,.0f}원  스탑={trail_stop:,.0f}원"
+            f"[{coin}] {current:,.2f}원  PnL={pnl_pct*100:+.2f}%  "
+            f"고점={highest:,.2f}원  스탑={trail_stop:,.2f}원"
         )
+        save_active(pos, highest, phase, sold_vol, recv_krw, trail)
 
         if phase == 1 and pnl_pct >= TP_HALF:
             recv_krw += do_sell(client, pos, half_vol, f"1차익절 {pnl_pct*100:+.1f}%")
@@ -364,11 +397,12 @@ def monitor_trailing(client: BithumbClient, pos: dict) -> float:
             phase    = 2
             trail    = TIGHT_TRAIL
             highest  = current
+            save_active(pos, highest, phase, sold_vol, recv_krw, trail)
             log.info(f"[{coin}] 2단계 - 트레일 {trail*100:.1f}%로 조임")
             continue
 
         if current <= trail_stop:
-            reason = f"트레일링스탑 {pnl_pct*100:+.1f}% (고점 {highest:,.0f}원 -{trail*100:.1f}%)"
+            reason = f"트레일링스탑 {pnl_pct*100:+.1f}% (고점 {highest:,.2f}원 -{trail*100:.1f}%)"
             recv_krw += do_sell(client, pos, total_vol - sold_vol, reason)
             break
 
@@ -381,6 +415,8 @@ def monitor_trailing(client: BithumbClient, pos: dict) -> float:
     pnl_pct = pnl / total_cost * 100
     log.info(f"[{coin}] 종료 | PnL={pnl:+,.0f}원 ({pnl_pct:+.2f}%)")
     notify.notify_sell(coin, pnl, pnl_pct, reason)
+
+    clear_active()
 
     try:
         log_trade(
@@ -420,6 +456,19 @@ def run():
     active_pos     = None
     cooldown_end   = 0.0
     scan_count     = 0
+
+    # 재시작 시 저장된 포지션 복구
+    saved = load_active()
+    if saved:
+        log.info(f"[복구] 저장된 포지션 발견: {saved['coin']} - 모니터링 재개")
+        pos   = {k: saved[k] for k in ["coin", "market", "entry_price", "volume", "cost", "entered_at"]}
+        state = {k: saved[k] for k in ["highest", "phase", "sold_vol", "recv_krw", "trail"]}
+        active_pos    = pos
+        daily_trades += 1
+        pnl           = monitor_trailing(client, pos, state)
+        daily_pnl    += pnl
+        active_pos    = None
+        cooldown_end  = time.time() + COOLDOWN_SEC
 
     while True:
         try:
