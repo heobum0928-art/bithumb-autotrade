@@ -16,13 +16,13 @@ import json
 import logging
 import yaml
 from collections import deque
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import init_db, log_trade
+from bithumb.db import init_db, log_trade, DB_PATH
 from bithumb import notify
 
 logging.basicConfig(
@@ -238,6 +238,39 @@ def get_price(client: BithumbClient, coin: str) -> float:
         return float(client.get_ticker(coin)["closing_price"])
     except Exception:
         return 0.0
+
+
+def send_daily_report(target_date: date) -> None:
+    """target_date 하루치 거래 손익을 텔레그램으로 전송."""
+    import sqlite3
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM trades WHERE date = ? ORDER BY exited_at", (target_date.isoformat(),)
+        ).fetchall()
+        con.close()
+
+        ds = target_date.strftime("%Y-%m-%d")
+        if not rows:
+            notify.send(f"<b>[일일 리포트 {ds}]</b>\n거래 없음", force=True)
+            return
+
+        total_pnl = sum(r["pnl_krw"] for r in rows)
+        wins      = sum(1 for r in rows if r["pnl_krw"] > 0)
+        total     = len(rows)
+        win_rate  = wins / total * 100
+
+        lines = [f"<b>[일일 리포트 {ds}]</b>",
+                 f"거래: {total}건 | 승률: {win_rate:.0f}% ({wins}승 {total-wins}패)"]
+        for r in rows:
+            sign = "+" if r["pnl_krw"] >= 0 else ""
+            lines.append(f"  {r['coin']}: {sign}{r['pnl_krw']:,.0f}원 ({r['pnl_pct']:+.1f}%)")
+        lines.append(f"\n<b>총 PnL: {total_pnl:+,.0f}원</b>")
+        notify.send("\n".join(lines), force=True)
+        log.info(f"[리포트] {ds} 전송 완료 | {total}건 | {total_pnl:+,.0f}원")
+    except Exception as e:
+        log.error(f"[리포트] 전송 실패: {e}")
 
 
 def check_orderbook(client: BithumbClient, coin: str) -> bool:
@@ -488,12 +521,13 @@ def run():
         f"진입={ALT_ENTRY_RATIO*100:.0f}% | TP={TP_HALF*100:.0f}% | 트레일={TRAIL_PCT*100:.1f}%"
     )
 
-    daily_pnl      = 0.0
-    daily_trades   = 0   # 통계용 카운터 (제한 없음)
-    today          = date.today()
-    active_pos     = None
-    cooldown_end   = 0.0
-    scan_count     = 0
+    daily_pnl        = 0.0
+    daily_trades     = 0   # 통계용 카운터 (제한 없음)
+    today            = date.today()
+    active_pos       = None
+    cooldown_end     = 0.0
+    scan_count       = 0
+    last_report_date = None  # 일일 리포트 중복 전송 방지
 
     # 재시작 시 저장된 포지션 복구
     saved = load_active()
@@ -515,6 +549,13 @@ def run():
                 daily_pnl    = 0.0
                 daily_trades = 0
                 today        = date.today()
+
+            # 매일 오전 7시 전일 손익 리포트
+            now = datetime.now()
+            if now.hour == 7 and last_report_date != today:
+                yesterday = today - timedelta(days=1)
+                send_daily_report(yesterday)
+                last_report_date = today
 
             if daily_pnl / capital <= daily_limit:
                 log.warning("[ALT] 일일 손실 한도 - 매매 중단")
