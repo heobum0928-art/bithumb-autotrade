@@ -54,6 +54,11 @@ BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 
 OB_BID_RATIO    = 1.5    # 호가 매수잔량 / 매도잔량 최소 비율
 TICK_BUY_RATIO  = 0.60   # 최근 체결 중 매수 비율 최소치
 
+LOSS_COIN_COOLDOWN_SEC = 4 * 3600  # 손실 코인 재진입 차단 시간 (4시간)
+STRICT_WINDOW   = 5     # 최근 N거래 기준으로 엄격 모드 판단
+STRICT_LOSS_CNT = 3     # N거래 중 손실이 이 이상이면 엄격 모드
+STRICT_MULT     = 1.3   # 엄격 모드 임계값 배수 (가격·거래량 기준 30% 강화)
+
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 
 STATE_FILE = Path("data/active_pos.json")
@@ -528,6 +533,9 @@ def run():
     cooldown_end     = 0.0
     scan_count       = 0
     last_report_date = None  # 일일 리포트 중복 전송 방지
+    loss_coins       = {}    # {coin: 손실 발생 timestamp} 코인별 쿨다운
+    recent_pnls      = deque(maxlen=STRICT_WINDOW)  # 최근 N거래 손익
+    strict_mode      = False  # 엄격 모드 플래그
 
     # 재시작 시 저장된 포지션 복구
     saved = load_active()
@@ -599,10 +607,17 @@ def run():
                 log.info(f"[보유중] {', '.join(holdings)} - 해당 코인 신호 무시")
 
             # ── 신호 탐색 ─────────────────────────────────────────────────────────
+            now_ts = time.time()
+            # 쿨다운 만료된 손실 코인 정리
+            loss_coins = {c: ts for c, ts in loss_coins.items()
+                          if now_ts - ts < LOSS_COIN_COOLDOWN_SEC}
+
             found = []
             for coin in tracker.coins():
                 if coin in SKIP_COINS or coin in holdings:
                     continue
+                if coin in loss_coins:
+                    continue  # 손실 쿨다운 중인 코인 스킵
                 sig = tracker.get_signal(coin)
                 if sig:
                     found.append(sig)
@@ -617,11 +632,22 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
+            # 엄격 모드: 진입 임계값 30% 강화 후 재필터
+            if strict_mode:
+                found = [s for s in found
+                         if s["price_chg"] >= PRICE_THRESH * STRICT_MULT
+                         and s["vol_mult"] >= VOLUME_MULT * STRICT_MULT]
+                if not found:
+                    log.info("[엄격 모드] 강화 조건 미달 - 스킵")
+                    time.sleep(SCAN_SEC)
+                    continue
+
             # 거래량 배수 기준 최강 신호 선택
             best = max(found, key=lambda x: x["vol_mult"])
             coin = best["coin"]
+            mode_tag = " [엄격]" if strict_mode else ""
             log.warning(
-                f"*** [진입 신호] {coin} | "
+                f"*** [진입 신호{mode_tag}] {coin} | "
                 f"가격={best['price_chg']*100:+.1f}% | "
                 f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
@@ -655,6 +681,30 @@ def run():
             active_pos    = None
             cooldown_end  = time.time() + COOLDOWN_SEC
             log.info(f"[ALT] 오늘 누적 PnL: {daily_pnl:+,.0f}원 | 거래:{daily_trades}건 | 쿨다운 {COOLDOWN_SEC}s")
+
+            # ── 손실 학습 ────────────────────────────────────────────────────────
+            recent_pnls.append(pnl)
+            if pnl < 0:
+                loss_coins[coin] = time.time()
+                log.info(f"[학습] {coin} 손실 -> {LOSS_COIN_COOLDOWN_SEC//3600}시간 재진입 차단")
+
+            if len(recent_pnls) == STRICT_WINDOW:
+                losses = sum(1 for p in recent_pnls if p < 0)
+                if not strict_mode and losses >= STRICT_LOSS_CNT:
+                    strict_mode = True
+                    log.warning(f"[엄격 모드 진입] 최근 {STRICT_WINDOW}거래 중 {losses}건 손실")
+                    notify.send(
+                        f"<b>[엄격 모드 진입]</b> 최근 {STRICT_WINDOW}거래 중 {losses}건 손실\n"
+                        f"진입 조건 {STRICT_MULT*100-100:.0f}% 강화 적용",
+                        force=True,
+                    )
+                elif strict_mode and losses < STRICT_LOSS_CNT:
+                    strict_mode = False
+                    log.info(f"[엄격 모드 해제] 최근 {STRICT_WINDOW}거래 중 손실 {losses}건으로 감소")
+                    notify.send(
+                        f"<b>[엄격 모드 해제]</b> 승률 회복 - 진입 조건 정상 복원",
+                        force=True,
+                    )
 
         except KeyboardInterrupt:
             log.info("종료 (Ctrl+C)")
