@@ -268,32 +268,44 @@ def get_coin_balance(client: BithumbClient, coin: str) -> float:
 
 def do_sell(client: BithumbClient, pos: dict, volume: float, reason: str) -> float:
     coin = pos["coin"]
-    # 실제 잔고 확인 후 min(요청량, 실제잔고) 사용 - 소수점 오차 방지
     actual_bal = get_coin_balance(client, coin)
-    if actual_bal < volume * 0.995:
-        volume = actual_bal
-    if volume <= 0:
-        log.error(f"[{coin}] 매도 수량 0 - 스킵")
+    if actual_bal <= 0:
+        log.info(f"[{coin}] 잔고 없음 - 이미 매도됨")
         return 0.0
+    volume = min(volume, actual_bal)
     log.info(f"[{coin}] {reason} - 매도 {volume:.8f} (잔고={actual_bal:.8f})")
-    for attempt in range(3):  # 최대 3회 재시도
+
+    attempt = 0
+    while True:
+        attempt += 1
+        last_uuid = None
         try:
-            r     = client.market_sell(pos["market"], volume)
-            uuid  = r.get("uuid")
-            order = wait_for_order(client, uuid)
-            if order.get("state") != "done":
-                log.warning(f"[{coin}] 매도 미체결 재시도 {attempt+1}/3 UUID={uuid}")
-                time.sleep(2)
-                continue
-            received = float(order.get("executed_funds", 0)) - float(order.get("paid_fee", 0))
-            log.info(f"[{coin}] 매도 체결 | 수령={received:,.0f}원")
-            return received
+            r         = client.market_sell(pos["market"], volume)
+            last_uuid = r.get("uuid")
+            order     = wait_for_order(client, last_uuid)
+            if order.get("state") == "done":
+                received = float(order.get("executed_funds", 0)) - float(order.get("paid_fee", 0))
+                log.info(f"[{coin}] 매도 체결 | 수령={received:,.0f}원 ({attempt}회차)")
+                return received
+            # 미체결 - 기존 주문 취소 후 재시도
+            log.warning(f"[{coin}] 매도 미체결 {attempt}회차 - 주문 취소 후 재시도")
+            try:
+                client.cancel_order(last_uuid)
+            except Exception:
+                pass
         except Exception as e:
-            log.warning(f"[{coin}] 매도 재시도 {attempt+1}/3: {e}")
-            time.sleep(3)
-    # 3회 모두 실패
-    notify.notify_error(f"{coin} 매도 실패! 수동 확인 필요 (사유: {reason})")
-    return -1.0  # -1 = 매도 실패 sentinel (0과 구분)
+            log.warning(f"[{coin}] 매도 오류 {attempt}회차: {e}")
+
+        if attempt % 5 == 0:
+            notify.notify_error(f"{coin} 매도 {attempt}회 실패 중, 자동 재시도...")
+
+        # 잔고 재확인 - 이미 팔렸으면 중단
+        bal = get_coin_balance(client, coin)
+        if bal <= 0:
+            log.info(f"[{coin}] 잔고 0 확인 - 매도 완료로 처리")
+            return 0.0
+        volume = min(volume, bal)
+        time.sleep(10)
 
 
 # ── 트레일링 스탑 ─────────────────────────────────────────────────────────────
