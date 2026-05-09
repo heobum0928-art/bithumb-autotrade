@@ -46,7 +46,9 @@ TIGHT_TRAIL     = 0.015  # 분할 후 조인 1.5%
 DAILY_LIMIT_PCT = -0.05
 MIN_KRW         = 5001
 COOLDOWN_SEC    = 120    # 청산 후 재진입 대기 (초)
-MIN_COIN_PRICE  = 10     # 최소 코인 단가 (원) — 저가 코인 노이즈 제거
+MIN_COIN_PRICE  = 10     # 최소 코인 단가 (원) - 저가 코인 노이즈 제거
+MAX_DAILY_TRADES = 10   # 일일 최대 거래 횟수
+BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 
@@ -154,6 +156,47 @@ def get_available_krw(client: BithumbClient) -> float:
     return 0.0
 
 
+def get_holdings(client: BithumbClient) -> set[str]:
+    """현재 보유 중인 코인 심볼 셋 반환 (KRW·P 제외, 1원 이상 평가 코인만)."""
+    held = set()
+    try:
+        accounts = client.get_accounts()
+        for a in accounts:
+            cur = a["currency"]
+            if cur in ("KRW", "P"):
+                continue
+            bal = float(a.get("balance", 0))
+            if bal <= 0:
+                continue
+            try:
+                price = float(client.get_ticker(cur)["closing_price"])
+                if bal * price >= 1000:  # 1,000원 이상이면 보유 중으로 간주
+                    held.add(cur)
+            except Exception:
+                if bal > 0.0001:
+                    held.add(cur)
+    except Exception:
+        pass
+    return held
+
+
+def is_btc_bullish(client: BithumbClient) -> bool:
+    """BTC 1시간 추세 확인. 낙폭이 BTC_DROP_LIMIT 이상이면 False 반환."""
+    try:
+        candles = client.get_candles("KRW-BTC", unit=60, count=2)
+        if len(candles) < 2:
+            return True
+        cur_price  = candles[0]["trade_price"]
+        prev_price = candles[1]["trade_price"]
+        chg = (cur_price - prev_price) / prev_price
+        if chg <= BTC_DROP_LIMIT:
+            log.info(f"[BTC 필터] 1시간 낙폭 {chg*100:.1f}% - 진입 차단")
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def get_price(client: BithumbClient, coin: str) -> float:
     try:
         return float(client.get_ticker(coin)["closing_price"])
@@ -214,7 +257,7 @@ def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
 
 
 def get_coin_balance(client: BithumbClient, coin: str) -> float:
-    """실제 거래소 잔고 조회 — 소수점 오차 방지."""
+    """실제 거래소 잔고 조회 - 소수점 오차 방지."""
     try:
         for a in client.get_accounts():
             if a["currency"] == coin.upper():
@@ -226,12 +269,12 @@ def get_coin_balance(client: BithumbClient, coin: str) -> float:
 
 def do_sell(client: BithumbClient, pos: dict, volume: float, reason: str) -> float:
     coin = pos["coin"]
-    # 실제 잔고 확인 후 min(요청량, 실제잔고) 사용 — 소수점 오차 방지
+    # 실제 잔고 확인 후 min(요청량, 실제잔고) 사용 - 소수점 오차 방지
     actual_bal = get_coin_balance(client, coin)
     if actual_bal < volume * 0.995:
         volume = actual_bal
     if volume <= 0:
-        log.error(f"[{coin}] 매도 수량 0 — 스킵")
+        log.error(f"[{coin}] 매도 수량 0 - 스킵")
         return 0.0
     log.info(f"[{coin}] {reason} - 매도 {volume:.8f} (잔고={actual_bal:.8f})")
     for attempt in range(3):  # 최대 3회 재시도
@@ -308,7 +351,7 @@ def monitor_trailing(client: BithumbClient, pos: dict) -> float:
 
     # recv_krw == -1.0 이면 매도 실패 (sentinel)
     if recv_krw < 0:
-        log.error(f"[{coin}] 매도 최종 실패 — 수동 처리 필요")
+        log.error(f"[{coin}] 매도 최종 실패 - 수동 처리 필요")
         return 0.0  # PnL 집계에 반영 안 함
 
     pnl     = recv_krw - total_cost
@@ -348,21 +391,28 @@ def run():
         f"진입={ALT_ENTRY_RATIO*100:.0f}% | TP={TP_HALF*100:.0f}% | 트레일={TRAIL_PCT*100:.1f}%"
     )
 
-    daily_pnl    = 0.0
-    today        = date.today()
-    active_pos   = None
-    cooldown_end = 0.0
-    scan_count   = 0
+    daily_pnl      = 0.0
+    daily_trades   = 0
+    today          = date.today()
+    active_pos     = None
+    cooldown_end   = 0.0
+    scan_count     = 0
 
     while True:
         try:
             if date.today() != today:
-                log.info(f"날짜 변경 | 전일 ALT PnL: {daily_pnl:+,.0f}원")
-                daily_pnl = 0.0
-                today     = date.today()
+                log.info(f"날짜 변경 | 전일 ALT PnL: {daily_pnl:+,.0f}원 | 거래:{daily_trades}건")
+                daily_pnl    = 0.0
+                daily_trades = 0
+                today        = date.today()
 
             if daily_pnl / capital <= daily_limit:
                 log.warning("[ALT] 일일 손실 한도 - 매매 중단")
+                time.sleep(300)
+                continue
+
+            if daily_trades >= MAX_DAILY_TRADES:
+                log.warning(f"[ALT] 일일 거래 한도 {MAX_DAILY_TRADES}건 도달 - 대기")
                 time.sleep(300)
                 continue
 
@@ -386,10 +436,20 @@ def run():
             if scan_count % 6 == 0:
                 log.info(f"[스캔] {len(tracker.coins())}개 코인 추적 중...")
 
-            # 신호 탐색
+            # ── BTC 추세 필터 ────────────────────────────────────────────────────
+            if not is_btc_bullish(client):
+                time.sleep(SCAN_SEC * 3)
+                continue
+
+            # ── 현재 보유 코인 파악 (중복 진입 방지) ─────────────────────────────
+            holdings = get_holdings(client)
+            if holdings:
+                log.info(f"[보유중] {', '.join(holdings)} - 해당 코인 신호 무시")
+
+            # ── 신호 탐색 ─────────────────────────────────────────────────────────
             found = []
             for coin in tracker.coins():
-                if coin in SKIP_COINS:
+                if coin in SKIP_COINS or coin in holdings:
                     continue
                 sig = tracker.get_signal(coin)
                 if sig:
@@ -411,7 +471,7 @@ def run():
             log.warning(
                 f"*** [진입 신호] {coin} | "
                 f"가격={best['price_chg']*100:+.1f}% | "
-                f"거래량={best['vol_mult']:.1f}x ***"
+                f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}/{MAX_DAILY_TRADES}건 ***"
             )
 
             avail   = get_available_krw(client)
@@ -426,12 +486,13 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            active_pos = pos
-            pnl        = monitor_trailing(client, pos)
-            daily_pnl += pnl
-            active_pos  = None
-            cooldown_end = time.time() + COOLDOWN_SEC
-            log.info(f"[ALT] 오늘 누적 PnL: {daily_pnl:+,.0f}원 | 쿨다운 {COOLDOWN_SEC}s")
+            active_pos    = pos
+            daily_trades += 1
+            pnl           = monitor_trailing(client, pos)
+            daily_pnl    += pnl
+            active_pos    = None
+            cooldown_end  = time.time() + COOLDOWN_SEC
+            log.info(f"[ALT] 오늘 누적 PnL: {daily_pnl:+,.0f}원 | 거래:{daily_trades}건 | 쿨다운 {COOLDOWN_SEC}s")
 
         except KeyboardInterrupt:
             log.info("종료 (Ctrl+C)")
