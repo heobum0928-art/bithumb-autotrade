@@ -14,6 +14,7 @@ import sys
 import time
 import json
 import logging
+import threading
 import yaml
 from collections import deque
 from datetime import datetime, date, timedelta
@@ -36,7 +37,9 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── 전략 파라미터 ──────────────────────────────────────────────────────────────
-SCAN_SEC        = 10     # 폴링 주기 (초)
+WS_URL          = "wss://pubwss.bithumb.com/pub/ws"
+WS_MIN_INTERVAL = 2.0    # WebSocket 스냅샷 최소 저장 간격 (초)
+SCAN_SEC        = 2      # 신호 체크 주기 (초) - WebSocket 실시간 수신으로 단축
 WINDOW_SEC      = 60     # 가격 변화 측정 윈도우 (초)
 PRICE_THRESH    = 0.02   # +2% 이상
 VOLUME_MULT     = 3.0    # 최근 거래속도 3배 이상
@@ -52,7 +55,8 @@ MAX_DAILY_TRADES  = 30     # 일일 최대 거래 횟수
 MIN_TRADE_KRW_PER_MIN = 1_000_000  # 분당 거래대금 최소 100만원
 BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
 OB_BID_RATIO    = 1.5    # 호가 매수잔량 / 매도잔량 최소 비율
-TICK_BUY_RATIO  = 0.60   # 최근 체결 중 매수 비율 최소치
+TICK_BUY_RATIO  = 0.60   # 최근 체결 중 매수 비율 최소치 (REST 폴백용)
+VOLUME_POWER_MIN = 100.0  # WebSocket volumePower 최소치 (100 = 매수=매도)
 
 LOSS_COIN_COOLDOWN_SEC = 4 * 3600  # 손실 코인 재진입 차단 시간 (4시간)
 STRICT_WINDOW   = 5     # 최근 N거래 기준으로 엄격 모드 판단
@@ -87,101 +91,165 @@ def clear_active() -> None:
 
 class PriceTracker:
     """
-    ticker/ALL 폴링 결과를 메모리에 누적.
-    각 코인별로 (timestamp, price, acc_vol_24H) 스냅샷 deque 유지.
+    WebSocket 실시간 수신으로 각 코인별 (timestamp, price, acc_val) 스냅샷 유지.
+    2초 간격 최소 저장, Lock으로 스레드 안전 보장.
     """
-    MAXLEN = 30  # 최대 300초치 (10초 * 30)
+    MAXLEN = 60  # 60개 스냅샷 = 120초치 (2초 * 60)
 
     def __init__(self):
         self._hist: dict[str, deque] = {}
+        self._vol_power: dict[str, float] = {}  # 최신 체결강도 (volumePower)
+        self._lock = threading.Lock()
+        self._ws = None
+        self._ws_running = False
 
-    def update(self, ticker_all: dict) -> None:
-        now = time.time()
-        for coin, data in ticker_all.items():
-            if coin == "date":
-                continue
+    def start_ws(self, symbols: list[str]) -> None:
+        """WebSocket 구독 시작 (백그라운드 스레드)."""
+        import websocket as _wslib
+        self._ws_running = True
+
+        def on_open(ws):
+            sub = {"type": "ticker", "symbols": symbols, "tickTypes": ["24H"]}
+            ws.send(json.dumps(sub))
+            log.info(f"[WS] 구독 완료: {len(symbols)}개 코인")
+
+        def on_message(ws, message):
             try:
-                price   = float(data["closing_price"])
-                acc_vol = float(data["acc_trade_value_24H"])
+                data = json.loads(message)
+                if data.get("type") != "ticker":
+                    return
+                c = data.get("content", {})
+                symbol = c.get("symbol", "")
+                if not symbol.endswith("_KRW"):
+                    return
+                coin    = symbol[:-4]
+                price   = float(c.get("closePrice", 0) or 0)
+                acc_val = float(c.get("value",      0) or 0)
+                vp      = float(c.get("volumePower", 100) or 100)
                 if price <= 0:
-                    continue
-                if coin not in self._hist:
-                    self._hist[coin] = deque(maxlen=self.MAXLEN)
-                self._hist[coin].append((now, price, acc_vol))
+                    return
+                now = time.time()
+                with self._lock:
+                    if coin not in self._hist:
+                        self._hist[coin] = deque(maxlen=self.MAXLEN)
+                    hist = self._hist[coin]
+                    if not hist or now - hist[-1][0] >= WS_MIN_INTERVAL:
+                        hist.append((now, price, acc_val))
+                    self._vol_power[coin] = vp
+            except Exception as e:
+                log.debug(f"[WS] 파싱 오류: {e}")
+
+        def on_error(ws, error):
+            log.warning(f"[WS] 에러: {error}")
+
+        def on_close(ws, code, msg):
+            log.warning(f"[WS] 연결 종료: {code}")
+
+        def run():
+            while self._ws_running:
+                try:
+                    ws = _wslib.WebSocketApp(
+                        WS_URL,
+                        on_open=on_open,
+                        on_message=on_message,
+                        on_error=on_error,
+                        on_close=on_close,
+                    )
+                    self._ws = ws
+                    ws.run_forever(ping_interval=20, ping_timeout=10)
+                except Exception as e:
+                    log.error(f"[WS] 실행 오류: {e}")
+                if self._ws_running:
+                    log.info("[WS] 5초 후 재연결...")
+                    time.sleep(5)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def stop_ws(self) -> None:
+        self._ws_running = False
+        if self._ws:
+            try:
+                self._ws.close()
             except Exception:
-                continue
+                pass
+
+    def get_vol_power(self, coin: str) -> float:
+        with self._lock:
+            return self._vol_power.get(coin, 100.0)
 
     def get_signal(self, coin: str) -> dict | None:
-        hist = self._hist.get(coin)
-        if not hist or len(hist) < 4:
-            return None
+        with self._lock:
+            hist = self._hist.get(coin)
+            if not hist or len(hist) < 4:
+                return None
 
-        snaps     = list(hist)
-        now_ts, now_price, now_vol = snaps[-1]
+            snaps = list(hist)
+            now_ts, now_price, now_vol = snaps[-1]
 
-        # ── 가격 변화: WINDOW_SEC 전 스냅샷과 비교 ──────────────────────────
-        target_ts = now_ts - WINDOW_SEC
-        old_snap  = snaps[0]
-        for s in snaps:
-            if s[0] <= target_ts:
-                old_snap = s
+            # ── 가격 변화: WINDOW_SEC 전 스냅샷과 비교 ────────────────────────
+            target_ts = now_ts - WINDOW_SEC
+            old_snap  = snaps[0]
+            for s in snaps:
+                if s[0] <= target_ts:
+                    old_snap = s
 
-        old_ts, old_price, old_vol = old_snap
-        elapsed = now_ts - old_ts
-        if elapsed < 20 or old_price <= 0:
-            return None
+            old_ts, old_price, old_vol = old_snap
+            elapsed = now_ts - old_ts
+            if elapsed < 20 or old_price <= 0:
+                return None
 
-        if now_price < MIN_COIN_PRICE:
-            return None  # 저가 코인 제외 (노이즈 심함)
+            if now_price < MIN_COIN_PRICE:
+                return None
 
-        price_chg = (now_price - old_price) / old_price
-        if price_chg < PRICE_THRESH:
-            return None
+            price_chg = (now_price - old_price) / old_price
+            if price_chg < PRICE_THRESH:
+                return None
 
-        # ── 거래 속도: 후반부 vs 전반부 비교 ────────────────────────────────
-        mid    = len(snaps) // 2
-        recent = snaps[mid:]
-        older  = snaps[:mid]
+            # ── 거래 속도: 후반부 vs 전반부 비교 ──────────────────────────────
+            mid    = len(snaps) // 2
+            recent = snaps[mid:]
+            older  = snaps[:mid]
 
-        if len(recent) < 2 or len(older) < 2:
-            return None
+            if len(recent) < 2 or len(older) < 2:
+                return None
 
-        r_vol  = recent[-1][2] - recent[0][2]
-        r_time = max(recent[-1][0] - recent[0][0], 1)
-        o_vol  = older[-1][2]  - older[0][2]
-        o_time = max(older[-1][0]  - older[0][0],  1)
+            r_vol  = recent[-1][2] - recent[0][2]
+            r_time = max(recent[-1][0] - recent[0][0], 1)
+            o_vol  = older[-1][2]  - older[0][2]
+            o_time = max(older[-1][0]  - older[0][0], 1)
 
-        if o_vol <= 0:
-            return None
+            if o_vol <= 0:
+                return None
 
-        r_rate   = r_vol / r_time
-        o_rate   = o_vol / o_time
-        vol_mult = r_rate / o_rate if o_rate > 0 else 0
+            r_rate   = r_vol / r_time
+            o_rate   = o_vol / o_time
+            vol_mult = r_rate / o_rate if o_rate > 0 else 0
 
-        if vol_mult < VOLUME_MULT:
-            return None
+            if vol_mult < VOLUME_MULT:
+                return None
 
-        # 거래대금 절댓값 필터: 분당 KRW 거래대금 최소치 미달이면 스킵
-        recent_krw_per_min = r_rate * 60
-        if recent_krw_per_min < MIN_TRADE_KRW_PER_MIN:
-            return None
+            # 거래대금 절댓값 필터
+            if r_rate * 60 < MIN_TRADE_KRW_PER_MIN:
+                return None
 
-        # 상승봉 연속성: 최근 4개 스냅샷 중 2번 이상 가격 상승 (단발 스파이크 차단)
-        recent_prices = [s[1] for s in snaps[-4:]]
-        up_count = sum(1 for i in range(1, len(recent_prices)) if recent_prices[i] > recent_prices[i - 1])
-        if up_count < 2:
-            return None
+            # 상승봉 연속성: 최근 4개 중 2번 이상 상승
+            recent_prices = [s[1] for s in snaps[-4:]]
+            up_count = sum(1 for i in range(1, len(recent_prices))
+                           if recent_prices[i] > recent_prices[i - 1])
+            if up_count < 2:
+                return None
 
-        return {
-            "coin":      coin,
-            "price_chg": price_chg,
-            "vol_mult":  vol_mult,
-            "price":     now_price,
-            "elapsed":   elapsed,
-        }
+            return {
+                "coin":      coin,
+                "price_chg": price_chg,
+                "vol_mult":  vol_mult,
+                "price":     now_price,
+                "elapsed":   elapsed,
+            }
 
     def coins(self) -> list[str]:
-        return list(self._hist.keys())
+        with self._lock:
+            return list(self._hist.keys())
 
 
 # ── 설정 / 잔고 ───────────────────────────────────────────────────────────────
@@ -298,19 +366,23 @@ def check_orderbook(client: BithumbClient, coin: str) -> bool:
         return True  # 오류 시 통과
 
 
-def check_tick_ratio(client: BithumbClient, coin: str) -> bool:
-    """최근 20건 체결 중 매수 비율 >= TICK_BUY_RATIO 이어야 진입 허용."""
+def check_tick_ratio(client: BithumbClient, coin: str, tracker: "PriceTracker" = None) -> bool:
+    """체결강도 확인. WebSocket volumePower 우선, 없으면 REST 폴백."""
+    if tracker is not None:
+        vp = tracker.get_vol_power(coin)
+        log.info(f"[{coin}] 체결강도(WS) volumePower={vp:.0f} (기준 {VOLUME_POWER_MIN:.0f})")
+        return vp >= VOLUME_POWER_MIN
     try:
         txs = client.get_transaction_history(coin, count=20)
         if not txs:
             return True
         buys = sum(1 for t in txs if t.get("type") == "bid")
         ratio = buys / len(txs)
-        log.info(f"[{coin}] 체결강도 매수비율={ratio*100:.0f}% (기준 {TICK_BUY_RATIO*100:.0f}%)")
+        log.info(f"[{coin}] 체결강도(REST) 매수비율={ratio*100:.0f}%")
         return ratio >= TICK_BUY_RATIO
     except Exception as e:
         log.debug(f"[{coin}] 체결강도 조회 실패: {e}")
-        return True  # 오류 시 통과
+        return True
 
 
 # ── 주문 ──────────────────────────────────────────────────────────────────────
@@ -519,7 +591,14 @@ def run():
     client  = BithumbClient()
     tracker = PriceTracker()
 
-    log.info("=== ALT 모멘텀 봇 시작 [공격 모드] ===")
+    # WebSocket 실시간 수신 시작
+    all_coins = client.get_all_coins_v2()
+    symbols   = [f"{c}_KRW" for c in all_coins]
+    tracker.start_ws(symbols)
+    log.info(f"[WS] {len(symbols)}개 코인 실시간 수신 시작 - 초기 데이터 수집 중...")
+    time.sleep(5)  # 초기 데이터 수집 대기
+
+    log.info("=== ALT 모멘텀 봇 시작 [WebSocket 실시간] ===")
     log.info(
         f"스캔={SCAN_SEC}s | 윈도우={WINDOW_SEC}s | "
         f"가격임계={PRICE_THRESH*100:.0f}% | 거래량배수={VOLUME_MULT:.0f}x | "
@@ -574,15 +653,6 @@ def run():
                 log.warning(f"[ALT] 일일 거래 한도 {MAX_DAILY_TRADES}건 도달 - 매매 중단")
                 notify.send(f"<b>[한도 도달]</b> 오늘 {MAX_DAILY_TRADES}건 거래 완료. 내일까지 매매 중단.", force=True)
                 time.sleep(3600)
-                continue
-
-            # 가격 스냅샷 갱신 (포지션 있어도 계속 수집)
-            try:
-                ticker_all = client.get_ticker("ALL")
-                tracker.update(ticker_all)
-            except Exception as e:
-                log.error(f"시세 조회 실패: {e}")
-                time.sleep(SCAN_SEC)
                 continue
 
             scan_count += 1
@@ -657,7 +727,7 @@ def run():
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
                 time.sleep(SCAN_SEC)
                 continue
-            if not check_tick_ratio(client, coin):
+            if not check_tick_ratio(client, coin, tracker):
                 log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
                 time.sleep(SCAN_SEC)
                 continue
