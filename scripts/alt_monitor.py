@@ -47,6 +47,7 @@ DAILY_LIMIT_PCT = -0.05
 MIN_KRW         = 5001
 COOLDOWN_SEC    = 120    # 청산 후 재진입 대기 (초)
 MIN_COIN_PRICE  = 10     # 최소 코인 단가 (원) - 저가 코인 노이즈 제거
+MIN_TRADE_KRW_PER_MIN = 1_000_000  # 분당 거래대금 최소 100만원
 BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
@@ -128,6 +129,17 @@ class PriceTracker:
         vol_mult = r_rate / o_rate if o_rate > 0 else 0
 
         if vol_mult < VOLUME_MULT:
+            return None
+
+        # 거래대금 절댓값 필터: 분당 KRW 거래대금 최소치 미달이면 스킵
+        recent_krw_per_min = r_rate * 60
+        if recent_krw_per_min < MIN_TRADE_KRW_PER_MIN:
+            return None
+
+        # 상승봉 연속성: 최근 4개 스냅샷 중 2번 이상 가격 상승 (단발 스파이크 차단)
+        recent_prices = [s[1] for s in snaps[-4:]]
+        up_count = sum(1 for i in range(1, len(recent_prices)) if recent_prices[i] > recent_prices[i - 1])
+        if up_count < 2:
             return None
 
         return {
