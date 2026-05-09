@@ -47,7 +47,6 @@ DAILY_LIMIT_PCT = -0.05
 MIN_KRW         = 5001
 COOLDOWN_SEC    = 120    # 청산 후 재진입 대기 (초)
 MIN_COIN_PRICE  = 10     # 최소 코인 단가 (원) - 저가 코인 노이즈 제거
-MAX_DAILY_TRADES = 10   # 일일 최대 거래 횟수
 BTC_DROP_LIMIT  = -0.015 # BTC 1시간 낙폭이 이 이상이면 진입 중단 (-1.5%)
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
@@ -392,7 +391,7 @@ def run():
     )
 
     daily_pnl      = 0.0
-    daily_trades   = 0
+    daily_trades   = 0   # 통계용 카운터 (제한 없음)
     today          = date.today()
     active_pos     = None
     cooldown_end   = 0.0
@@ -408,11 +407,6 @@ def run():
 
             if daily_pnl / capital <= daily_limit:
                 log.warning("[ALT] 일일 손실 한도 - 매매 중단")
-                time.sleep(300)
-                continue
-
-            if daily_trades >= MAX_DAILY_TRADES:
-                log.warning(f"[ALT] 일일 거래 한도 {MAX_DAILY_TRADES}건 도달 - 대기")
                 time.sleep(300)
                 continue
 
@@ -471,7 +465,7 @@ def run():
             log.warning(
                 f"*** [진입 신호] {coin} | "
                 f"가격={best['price_chg']*100:+.1f}% | "
-                f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}/{MAX_DAILY_TRADES}건 ***"
+                f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
 
             avail   = get_available_krw(client)
