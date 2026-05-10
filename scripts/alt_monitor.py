@@ -37,8 +37,8 @@ log = logging.getLogger(__name__)
 
 # ── 전략 파라미터 ──────────────────────────────────────────────────────────────
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
-WS_MIN_INTERVAL      = 2.0
-SCAN_SEC             = 2
+WS_MIN_INTERVAL      = 1.0
+SCAN_SEC             = 1
 WINDOW_SEC           = 60
 PRICE_THRESH         = 0.03
 VOLUME_MULT          = 5.0
@@ -309,6 +309,13 @@ class PriceTracker:
             return {"coin": coin, "price_chg": price_chg,
                     "vol_mult": vol_mult, "price": now_price,
                     "type": "preemptive"}
+
+    def get_latest_price(self, coin: str) -> float:
+        with self._lock:
+            hist = self._hist.get(coin)
+            if hist:
+                return hist[-1][1]
+            return 0.0
 
     def coins(self) -> list[str]:
         with self._lock:
@@ -648,7 +655,9 @@ def run():
                 total_cost = float(pos["cost"])
                 half_vol   = round(total_vol * 0.5, 8)
 
-                current = get_price(client, coin)
+                current = tracker.get_latest_price(coin)
+                if current <= 0:
+                    current = get_price(client, coin)
                 if current > 0:
                     if current > highest:
                         highest = current
