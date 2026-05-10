@@ -60,6 +60,7 @@ TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
 
 # 선진입(거래량 선행) 파라미터
+PRE_ENABLED          = False  # 데이터 기반 비활성화 (14% 승률, 손실 지속)
 PRE_VOL_MULT         = 12.0  # 최근 10초 거래량이 이전 대비 12배 (8→12, 가짜신호 감소)
 PRE_PRICE_MAX        = 0.01  # 가격 변화 아직 +1% 미만 (안 오른 상태)
 PRE_TIMEOUT_SEC      = 600   # 10분 안에 목표 미달 시 청산 (5→10, 데이터 기반 조정)
@@ -1009,54 +1010,55 @@ def run():
                         f"현재={sig['price']:,.3f}원"
                     )
 
-            # ── 선진입 신호 탐색 (거래량 선행, 가격 급등 전) ─────────────────
+            # ── 선진입 신호 탐색 (PRE_ENABLED=False 로 비활성화 중) ───────────
             pre_found = []
-            for coin in tracker.coins():
-                if coin in SKIP_COINS or coin in holdings or coin in loss_coins:
-                    continue
-                pre_sig = tracker.get_preemptive_signal(coin)
-                if pre_sig:
-                    pre_found.append(pre_sig)
-                    log.info(
-                        f"  [선진입] {coin} | "
-                        f"거래량={pre_sig['vol_mult']:.0f}x | "
-                        f"가격={pre_sig['price_chg']*100:+.1f}%"
-                    )
+            if PRE_ENABLED:
+                for coin in tracker.coins():
+                    if coin in SKIP_COINS or coin in holdings or coin in loss_coins:
+                        continue
+                    pre_sig = tracker.get_preemptive_signal(coin)
+                    if pre_sig:
+                        pre_found.append(pre_sig)
+                        log.info(
+                            f"  [선진입] {coin} | "
+                            f"거래량={pre_sig['vol_mult']:.0f}x | "
+                            f"가격={pre_sig['price_chg']*100:+.1f}%"
+                        )
 
-            if pre_found:
-                best_pre = max(pre_found, key=lambda x: x["vol_mult"])
-                coin     = best_pre["coin"]
-                log.warning(
-                    f"*** [선진입 신호] {coin} | "
-                    f"거래량={best_pre['vol_mult']:.0f}x | "
-                    f"가격={best_pre['price_chg']*100:+.1f}% | 즉시 진입 ***"
-                )
-                ok = (check_orderbook(client, coin)
-                      and check_tick_ratio(client, coin, tracker))
-                if not ok:
-                    log.info(f"[{coin}] 선진입 필터 미달 - 스킵")
-                else:
-                    avail   = get_available_krw(client)
-                    buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
-                    if buy_krw >= MIN_KRW:
-                        new_pos = do_buy(client, coin, buy_krw)
-                        if new_pos:
-                            new_pos["entry_type"] = "preemptive"
-                            pos      = new_pos
-                            highest  = float(pos["entry_price"])
-                            phase    = 1
-                            sold_vol = 0.0
-                            recv_krw = 0.0
-                            trail    = TRAIL_PCT
-                            daily_trades += 1
-                            save_active(pos, highest, phase, sold_vol, recv_krw, trail)
-                            log.info(
-                                f"[{coin}] 선진입 시작 | "
-                                f"진입={highest:,.3f}원 | "
-                                f"타임아웃={PRE_TIMEOUT_SEC//60}분"
-                            )
-                time.sleep(SCAN_SEC)
-                continue
+                if pre_found:
+                    best_pre = max(pre_found, key=lambda x: x["vol_mult"])
+                    coin     = best_pre["coin"]
+                    log.warning(
+                        f"*** [선진입 신호] {coin} | "
+                        f"거래량={best_pre['vol_mult']:.0f}x | "
+                        f"가격={best_pre['price_chg']*100:+.1f}% | 즉시 진입 ***"
+                    )
+                    ok = (check_orderbook(client, coin)
+                          and check_tick_ratio(client, coin, tracker))
+                    if not ok:
+                        log.info(f"[{coin}] 선진입 필터 미달 - 스킵")
+                    else:
+                        avail   = get_available_krw(client)
+                        buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
+                        if buy_krw >= MIN_KRW:
+                            new_pos = do_buy(client, coin, buy_krw)
+                            if new_pos:
+                                new_pos["entry_type"] = "preemptive"
+                                pos      = new_pos
+                                highest  = float(pos["entry_price"])
+                                phase    = 1
+                                sold_vol = 0.0
+                                recv_krw = 0.0
+                                trail    = TRAIL_PCT
+                                daily_trades += 1
+                                save_active(pos, highest, phase, sold_vol, recv_krw, trail)
+                                log.info(
+                                    f"[{coin}] 선진입 시작 | "
+                                    f"진입={highest:,.3f}원 | "
+                                    f"타임아웃={PRE_TIMEOUT_SEC//60}분"
+                                )
+                    time.sleep(SCAN_SEC)
+                    continue
 
             if not found:
                 time.sleep(SCAN_SEC)
