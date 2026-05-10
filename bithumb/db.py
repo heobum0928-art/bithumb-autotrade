@@ -68,6 +68,10 @@ def log_trade(
 ) -> None:
     pnl_krw = received_krw - cost_krw
     pnl_pct = pnl_krw / cost_krw * 100 if cost_krw else 0
+    if isinstance(entered_at, str):
+        entered_at = datetime.fromisoformat(entered_at)
+    if isinstance(exited_at, str):
+        exited_at = datetime.fromisoformat(exited_at)
     hold_sec = int((exited_at - entered_at).total_seconds())
     row = (
         exited_at.strftime("%Y-%m-%d"),
