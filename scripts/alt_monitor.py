@@ -60,7 +60,7 @@ TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
 
 # 선진입(거래량 선행) 파라미터
-PRE_VOL_MULT         = 8.0   # 최근 10초 거래량이 이전 대비 8배
+PRE_VOL_MULT         = 12.0  # 최근 10초 거래량이 이전 대비 12배 (8→12, 가짜신호 감소)
 PRE_PRICE_MAX        = 0.01  # 가격 변화 아직 +1% 미만 (안 오른 상태)
 PRE_TIMEOUT_SEC      = 300   # 5분 안에 목표 미달 시 청산
 PRE_MIN_MOVE         = 0.01  # 타임아웃 판단 기준 최소 상승 +1%
@@ -805,7 +805,8 @@ def run():
                         # 급락 손절 (선진입 -3%, 일반 -5%)
                         stop_pct = PRE_HARD_STOP if entry_type == "preemptive" else INITIAL_STOP_PCT
                         if pnl_pct <= stop_pct:
-                            reason   = f"초기손절 {pnl_pct*100:+.1f}% (진입 {hold_min:.0f}분, 급락)"
+                            tag    = "[선진입] " if entry_type == "preemptive" else ""
+                            reason = f"{tag}초기손절 {pnl_pct*100:+.1f}% (진입 {hold_min:.0f}분, 급락)"
                             received = do_sell(client, pos, total_vol - sold_vol, reason)
                             if received is not None:
                                 recv_krw += received
@@ -851,7 +852,8 @@ def run():
 
                     # 트레일링 스탑
                     elif current <= trail_stop:
-                        reason   = (f"트레일링스탑 {pnl_pct*100:+.1f}% "
+                        tag    = "[선진입] " if entry_type == "preemptive" else ""
+                        reason = (f"{tag}트레일링스탑 {pnl_pct*100:+.1f}% "
                                     f"(고점 {highest:,.3f}원 -{trail*100:.1f}%)")
                         received = do_sell(client, pos, total_vol - sold_vol, reason)
                         if received is not None:
