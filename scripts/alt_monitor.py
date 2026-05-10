@@ -59,6 +59,13 @@ OB_BID_RATIO         = 1.5
 TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
 
+# 선진입(거래량 선행) 파라미터
+PRE_VOL_MULT         = 8.0   # 최근 10초 거래량이 이전 대비 8배
+PRE_PRICE_MAX        = 0.01  # 가격 변화 아직 +1% 미만 (안 오른 상태)
+PRE_TIMEOUT_SEC      = 300   # 5분 안에 목표 미달 시 청산
+PRE_MIN_MOVE         = 0.01  # 타임아웃 판단 기준 최소 상승 +1%
+PRE_HARD_STOP        = -0.03 # 선진입 급락 손절 -3%
+
 LOSS_COIN_COOLDOWN_SEC = 4 * 3600
 STRICT_WINDOW        = 5
 STRICT_LOSS_CNT      = 3
@@ -251,6 +258,57 @@ class PriceTracker:
 
             return {"coin": coin, "price_chg": price_chg,
                     "vol_mult": vol_mult, "price": now_price, "elapsed": elapsed}
+
+    def get_preemptive_signal(self, coin: str) -> dict | None:
+        """
+        거래량 선행 신호: 가격은 아직 +1% 미만인데 거래량이 8배 이상 폭발.
+        가격 급등 30~60초 전 선진입 포착.
+        """
+        with self._lock:
+            hist = self._hist.get(coin)
+            if not hist or len(hist) < 10:
+                return None
+            snaps = list(hist)
+            now_ts, now_price, _ = snaps[-1]
+
+            if now_price < MIN_COIN_PRICE:
+                return None
+
+            # 최근 5개(약 10초) vs 이전 스냅샷
+            recent = snaps[-5:]
+            older  = snaps[:-5]
+            if len(older) < 5:
+                return None
+
+            # 가격 변화 — 아직 안 올랐어야 함
+            old_price = older[-1][1]
+            if old_price <= 0:
+                return None
+            price_chg = (now_price - old_price) / old_price
+            if abs(price_chg) >= PRE_PRICE_MAX:
+                return None  # 이미 움직였거나 하락 중
+
+            # 거래량 비율
+            r_vol  = recent[-1][2] - recent[0][2]
+            r_time = max(recent[-1][0] - recent[0][0], 1)
+            o_vol  = older[-1][2]  - older[0][2]
+            o_time = max(older[-1][0]  - older[0][0], 1)
+            if o_vol <= 0:
+                return None
+
+            r_rate   = r_vol / r_time
+            o_rate   = o_vol / o_time
+            vol_mult = r_rate / o_rate if o_rate > 0 else 0
+            if vol_mult < PRE_VOL_MULT:
+                return None
+
+            # 거래대금 절댓값 (선진입은 2배 기준)
+            if r_rate * 60 < MIN_TRADE_KRW_PER_MIN * 2:
+                return None
+
+            return {"coin": coin, "price_chg": price_chg,
+                    "vol_mult": vol_mult, "price": now_price,
+                    "type": "preemptive"}
 
     def coins(self) -> list[str]:
         with self._lock:
@@ -538,6 +596,8 @@ def run():
         log.info(f"[복구] 저장된 포지션: {saved['coin']} - 모니터링 재개")
         pos      = {k: saved[k] for k in
                     ["coin", "market", "entry_price", "volume", "cost", "entered_at"]}
+        if "entry_type" in saved:
+            pos["entry_type"] = saved["entry_type"]
         highest  = float(saved.get("highest",  pos["entry_price"]))
         phase    = int(saved.get("phase",      1))
         sold_vol = float(saved.get("sold_vol", 0.0))
@@ -609,9 +669,46 @@ def run():
                     )
                     save_active(pos, highest, phase, sold_vol, recv_krw, trail)
 
-                    # ── 초기 10분: 급락(-5%)만 손절, 나머지는 보유 ──────────
+                    entry_type = pos.get("entry_type", "regular")
+
+                    # ── 초기 보유 구간 ────────────────────────────────────────
                     if hold_elapsed < HOLD_MIN_SEC:
-                        if pnl_pct <= INITIAL_STOP_PCT:
+                        # 선진입 타임아웃: 5분 안에 +1% 미달 시 청산
+                        if (entry_type == "preemptive"
+                                and hold_elapsed >= PRE_TIMEOUT_SEC
+                                and pnl_pct < PRE_MIN_MOVE):
+                            reason   = f"선진입 타임아웃 ({hold_min:.0f}분, 목표 미달)"
+                            received = do_sell(client, pos, total_vol - sold_vol, reason)
+                            if received is not None:
+                                recv_krw += received
+                            final_pnl     = recv_krw - total_cost
+                            final_pnl_pct = final_pnl / total_cost * 100
+                            log.info(f"[{coin}] 선진입 타임아웃 | PnL={final_pnl:+,.0f}원")
+                            notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
+                            try:
+                                log_trade(
+                                    coin=coin, market=pos["market"],
+                                    entry_price=entry, exit_price=current,
+                                    volume=total_vol, cost_krw=total_cost,
+                                    received_krw=recv_krw, exit_reason=reason,
+                                    entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                )
+                            except Exception as e:
+                                log.error(f"[DB] 저장 실패: {e}")
+                            clear_active()
+                            daily_pnl += final_pnl
+                            recent_pnls.append(final_pnl)
+                            if final_pnl < 0:
+                                loss_coins[coin] = time.time()
+                            pos = None; highest = 0.0; phase = 1
+                            sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                            cooldown_end = time.time() + COOLDOWN_SEC
+                            time.sleep(SCAN_SEC)
+                            continue
+
+                        # 급락 손절 (선진입 -3%, 일반 -5%)
+                        stop_pct = PRE_HARD_STOP if entry_type == "preemptive" else INITIAL_STOP_PCT
+                        if pnl_pct <= stop_pct:
                             reason   = f"초기손절 {pnl_pct*100:+.1f}% (진입 {hold_min:.0f}분, 급락)"
                             received = do_sell(client, pos, total_vol - sold_vol, reason)
                             if received is not None:
@@ -754,6 +851,55 @@ def run():
                         f"거래량={sig['vol_mult']:.1f}x | "
                         f"현재={sig['price']:,.3f}원"
                     )
+
+            # ── 선진입 신호 탐색 (거래량 선행, 가격 급등 전) ─────────────────
+            pre_found = []
+            for coin in tracker.coins():
+                if coin in SKIP_COINS or coin in holdings or coin in loss_coins:
+                    continue
+                pre_sig = tracker.get_preemptive_signal(coin)
+                if pre_sig:
+                    pre_found.append(pre_sig)
+                    log.info(
+                        f"  [선진입] {coin} | "
+                        f"거래량={pre_sig['vol_mult']:.0f}x | "
+                        f"가격={pre_sig['price_chg']*100:+.1f}%"
+                    )
+
+            if pre_found:
+                best_pre = max(pre_found, key=lambda x: x["vol_mult"])
+                coin     = best_pre["coin"]
+                log.warning(
+                    f"*** [선진입 신호] {coin} | "
+                    f"거래량={best_pre['vol_mult']:.0f}x | "
+                    f"가격={best_pre['price_chg']*100:+.1f}% | 즉시 진입 ***"
+                )
+                ok = (check_orderbook(client, coin)
+                      and check_tick_ratio(client, coin, tracker))
+                if not ok:
+                    log.info(f"[{coin}] 선진입 필터 미달 - 스킵")
+                else:
+                    avail   = get_available_krw(client)
+                    buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
+                    if buy_krw >= MIN_KRW:
+                        new_pos = do_buy(client, coin, buy_krw)
+                        if new_pos:
+                            new_pos["entry_type"] = "preemptive"
+                            pos      = new_pos
+                            highest  = float(pos["entry_price"])
+                            phase    = 1
+                            sold_vol = 0.0
+                            recv_krw = 0.0
+                            trail    = TRAIL_PCT
+                            daily_trades += 1
+                            save_active(pos, highest, phase, sold_vol, recv_krw, trail)
+                            log.info(
+                                f"[{coin}] 선진입 시작 | "
+                                f"진입={highest:,.3f}원 | "
+                                f"타임아웃={PRE_TIMEOUT_SEC//60}분"
+                            )
+                time.sleep(SCAN_SEC)
+                continue
 
             if not found:
                 time.sleep(SCAN_SEC)
