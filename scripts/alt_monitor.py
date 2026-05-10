@@ -40,12 +40,14 @@ WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 2.0
 SCAN_SEC             = 2
 WINDOW_SEC           = 60
-PRICE_THRESH         = 0.03   # 2% → 3%
-VOLUME_MULT          = 5.0   # 3x → 5x
-ALT_ENTRY_RATIO      = 0.15  # 30% → 15%
-TP_HALF              = 0.04
-TRAIL_PCT            = 0.025
-TIGHT_TRAIL          = 0.015
+PRICE_THRESH         = 0.03
+VOLUME_MULT          = 5.0
+ALT_ENTRY_RATIO      = 0.15
+TP_HALF              = 0.06   # 4% → 6% (더 오래 들고 가기)
+TRAIL_PCT            = 0.04   # 2.5% → 4% (넓은 트레일)
+TIGHT_TRAIL          = 0.025  # 1.5% → 2.5%
+HOLD_MIN_SEC         = 600    # 진입 후 최소 10분 보유
+INITIAL_STOP_PCT     = -0.05  # 초기 보유 중 급락 손절 -5%
 DAILY_LIMIT_PCT      = -0.05
 MIN_KRW              = 5001
 COOLDOWN_SEC         = 120
@@ -56,8 +58,6 @@ BTC_DROP_LIMIT       = -0.015
 OB_BID_RATIO         = 1.5
 TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
-
-HARD_STOP_PCT        = -0.02  # 진입가 대비 -2% 하드 스탑
 
 LOSS_COIN_COOLDOWN_SEC = 4 * 3600
 STRICT_WINDOW        = 5
@@ -593,46 +593,55 @@ def run():
                     if current > highest:
                         highest = current
 
-                    trail_stop = highest * (1 - trail)
-                    pnl_pct    = (current - entry) / entry
+                    trail_stop   = highest * (1 - trail)
+                    pnl_pct      = (current - entry) / entry
+                    try:
+                        entered_ts = datetime.fromisoformat(str(pos["entered_at"])).timestamp()
+                    except Exception:
+                        entered_ts = time.time() - HOLD_MIN_SEC
+                    hold_elapsed = time.time() - entered_ts
+                    hold_min     = hold_elapsed / 60
 
                     log.info(
                         f"[{coin}] {current:,.3f}원  PnL={pnl_pct*100:+.2f}%  "
-                        f"고점={highest:,.3f}원  스탑={trail_stop:,.3f}원  단계={phase}"
+                        f"고점={highest:,.3f}원  스탑={trail_stop:,.3f}원  "
+                        f"보유={hold_min:.0f}분  단계={phase}"
                     )
                     save_active(pos, highest, phase, sold_vol, recv_krw, trail)
 
-                    # 하드 스탑: 진입가 대비 -2% 즉시 손절
-                    if pnl_pct <= HARD_STOP_PCT:
-                        reason   = f"하드스탑 {pnl_pct*100:+.1f}% (진입가 -{abs(HARD_STOP_PCT)*100:.0f}%)"
-                        received = do_sell(client, pos, total_vol - sold_vol, reason)
-                        if received is not None:
-                            recv_krw += received
-                        final_pnl     = recv_krw - total_cost
-                        final_pnl_pct = final_pnl / total_cost * 100
-                        log.info(f"[{coin}] 하드스탑 청산 | PnL={final_pnl:+,.0f}원 ({final_pnl_pct:+.2f}%)")
-                        notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
-                        try:
-                            log_trade(
-                                coin=coin, market=pos["market"],
-                                entry_price=entry, exit_price=current,
-                                volume=total_vol, cost_krw=total_cost,
-                                received_krw=recv_krw, exit_reason=reason,
-                                entered_at=pos["entered_at"], exited_at=datetime.now(),
-                            )
-                        except Exception as e:
-                            log.error(f"[DB] 저장 실패: {e}")
-                        clear_active()
-                        daily_pnl += final_pnl
-                        recent_pnls.append(final_pnl)
-                        if final_pnl < 0:
-                            loss_coins[coin] = time.time()
-                        pos = None; highest = 0.0; phase = 1
-                        sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
-                        cooldown_end = time.time() + COOLDOWN_SEC
+                    # ── 초기 10분: 급락(-5%)만 손절, 나머지는 보유 ──────────
+                    if hold_elapsed < HOLD_MIN_SEC:
+                        if pnl_pct <= INITIAL_STOP_PCT:
+                            reason   = f"초기손절 {pnl_pct*100:+.1f}% (진입 {hold_min:.0f}분, 급락)"
+                            received = do_sell(client, pos, total_vol - sold_vol, reason)
+                            if received is not None:
+                                recv_krw += received
+                            final_pnl     = recv_krw - total_cost
+                            final_pnl_pct = final_pnl / total_cost * 100
+                            log.info(f"[{coin}] 초기손절 | PnL={final_pnl:+,.0f}원 ({final_pnl_pct:+.2f}%)")
+                            notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
+                            try:
+                                log_trade(
+                                    coin=coin, market=pos["market"],
+                                    entry_price=entry, exit_price=current,
+                                    volume=total_vol, cost_krw=total_cost,
+                                    received_krw=recv_krw, exit_reason=reason,
+                                    entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                )
+                            except Exception as e:
+                                log.error(f"[DB] 저장 실패: {e}")
+                            clear_active()
+                            daily_pnl += final_pnl
+                            recent_pnls.append(final_pnl)
+                            if final_pnl < 0:
+                                loss_coins[coin] = time.time()
+                            pos = None; highest = 0.0; phase = 1
+                            sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                            cooldown_end = time.time() + COOLDOWN_SEC
                         time.sleep(SCAN_SEC)
                         continue
 
+                    # ── 10분 이후: 1차 익절 + 트레일링스탑 ─────────────────
                     # 1차 익절
                     if phase == 1 and pnl_pct >= TP_HALF:
                         received = do_sell(client, pos, half_vol,
