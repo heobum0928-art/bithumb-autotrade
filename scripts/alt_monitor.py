@@ -655,6 +655,43 @@ def run():
                 total_cost = float(pos["cost"])
                 half_vol   = round(total_vol * 0.5, 8)
 
+                # 30초마다 실제 잔고 체크 → 수동 매도 감지
+                try:
+                    entered_ts_chk = datetime.fromisoformat(str(pos["entered_at"])).timestamp()
+                except Exception:
+                    entered_ts_chk = time.time()
+                chk_elapsed = int(time.time() - entered_ts_chk)
+                if chk_elapsed > 0 and chk_elapsed % 30 == 0:
+                    actual_bal = get_coin_balance(client, coin)
+                    remaining  = float(pos["volume"]) - float(pos.get("sold_vol", 0))
+                    if actual_bal < remaining * 0.01:
+                        current_p  = tracker.get_latest_price(coin) or get_price(client, coin)
+                        ext_pnl    = recv_krw - total_cost
+                        ext_pnl_pct = ext_pnl / total_cost * 100 if total_cost else 0
+                        reason     = "외부청산 (수동 매도 감지)"
+                        log.warning(f"[{coin}] 수동 매도 감지 - 포지션 종료")
+                        notify.notify_sell(coin, ext_pnl, ext_pnl_pct, reason)
+                        try:
+                            log_trade(
+                                coin=coin, market=pos["market"],
+                                entry_price=float(pos["entry_price"]),
+                                exit_price=current_p,
+                                volume=float(pos["volume"]),
+                                cost_krw=total_cost, received_krw=recv_krw,
+                                exit_reason=reason,
+                                entered_at=pos["entered_at"], exited_at=datetime.now(),
+                            )
+                        except Exception as e:
+                            log.error(f"[DB] 저장 실패: {e}")
+                        clear_active()
+                        daily_pnl += ext_pnl
+                        recent_pnls.append(ext_pnl)
+                        pos = None; highest = 0.0; phase = 1
+                        sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                        cooldown_end = time.time() + COOLDOWN_SEC
+                        time.sleep(SCAN_SEC)
+                        continue
+
                 current = tracker.get_latest_price(coin)
                 if current <= 0:
                     current = get_price(client, coin)
