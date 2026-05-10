@@ -73,8 +73,9 @@ STRICT_MULT          = 1.3
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 
-STATE_FILE = Path("data/active_pos.json")
-LOCK_FILE  = Path("data/bot.lock")
+STATE_FILE      = Path("data/active_pos.json")
+LOCK_FILE       = Path("data/bot.lock")
+LOSS_COINS_FILE = Path("data/loss_coins.json")
 
 
 # ── 프로세스 중복 방지 ─────────────────────────────────────────────────────────
@@ -118,6 +119,20 @@ def load_active() -> dict | None:
 
 def clear_active() -> None:
     STATE_FILE.unlink(missing_ok=True)
+
+
+def save_loss_coins(loss_coins: dict) -> None:
+    LOSS_COINS_FILE.parent.mkdir(exist_ok=True)
+    LOSS_COINS_FILE.write_text(json.dumps(loss_coins), encoding="utf-8")
+
+
+def load_loss_coins() -> dict:
+    if not LOSS_COINS_FILE.exists():
+        return {}
+    try:
+        return json.loads(LOSS_COINS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 # ── 실시간 가격 추적기 ─────────────────────────────────────────────────────────
@@ -597,24 +612,58 @@ def run():
     recv_krw = 0.0
     trail    = TRAIL_PCT
 
+    # 손실 코인 쿨다운 복구 (재시작해도 유지)
+    loss_coins = load_loss_coins()
+    log.info(f"[복구] 손실 쿨다운 코인: {list(loss_coins.keys()) or '없음'}")
+
     # 재시작 시 저장된 포지션 복구
     saved = load_active()
     if saved:
-        log.info(f"[복구] 저장된 포지션: {saved['coin']} - 모니터링 재개")
-        pos      = {k: saved[k] for k in
-                    ["coin", "market", "entry_price", "volume", "cost", "entered_at"]}
-        if "entry_type" in saved:
-            pos["entry_type"] = saved["entry_type"]
-        highest  = float(saved.get("highest",  pos["entry_price"]))
-        phase    = int(saved.get("phase",      1))
-        sold_vol = float(saved.get("sold_vol", 0.0))
-        recv_krw = float(saved.get("recv_krw", 0.0))
-        trail    = float(saved.get("trail",    TRAIL_PCT))
-        daily_trades += 1
-        log.info(
-            f"[{pos['coin']}] 복구 완료 | "
-            f"진입={float(pos['entry_price']):,.3f}원 고점={highest:,.3f}원 단계={phase}"
-        )
+        saved_coin = saved["coin"]
+        saved_bal  = get_coin_balance(client, saved_coin)
+        saved_remaining = float(saved.get("volume", 0)) - float(saved.get("sold_vol", 0))
+
+        if saved_bal < saved_remaining * 0.01:
+            # 잔고 없음 → 재시작 전에 외부청산된 것
+            log.warning(f"[복구] {saved_coin} 잔고 없음 - 외부청산으로 처리")
+            ext_recv = float(saved.get("recv_krw", 0))
+            ext_cost = float(saved.get("cost", 0))
+            ext_pnl  = ext_recv - ext_cost
+            ext_pct  = ext_pnl / ext_cost * 100 if ext_cost else 0
+            notify.notify_sell(saved_coin, ext_pnl, ext_pct, "외부청산 (재시작 시 잔고 없음)")
+            try:
+                cur_price = get_price(client, saved_coin)
+                log_trade(
+                    coin=saved_coin, market=saved["market"],
+                    entry_price=float(saved["entry_price"]),
+                    exit_price=cur_price,
+                    volume=float(saved["volume"]),
+                    cost_krw=ext_cost, received_krw=ext_recv,
+                    exit_reason="외부청산 (재시작 시 잔고 없음)",
+                    entered_at=saved["entered_at"], exited_at=datetime.now(),
+                )
+            except Exception as e:
+                log.error(f"[DB] 외부청산 저장 실패: {e}")
+            clear_active()
+            if ext_pnl < 0:
+                loss_coins[saved_coin] = time.time()
+                save_loss_coins(loss_coins)
+        else:
+            log.info(f"[복구] 저장된 포지션: {saved_coin} - 모니터링 재개")
+            pos      = {k: saved[k] for k in
+                        ["coin", "market", "entry_price", "volume", "cost", "entered_at"]}
+            if "entry_type" in saved:
+                pos["entry_type"] = saved["entry_type"]
+            highest  = float(saved.get("highest",  pos["entry_price"]))
+            phase    = int(saved.get("phase",      1))
+            sold_vol = float(saved.get("sold_vol", 0.0))
+            recv_krw = float(saved.get("recv_krw", 0.0))
+            trail    = float(saved.get("trail",    TRAIL_PCT))
+            daily_trades += 1
+            log.info(
+                f"[{pos['coin']}] 복구 완료 | "
+                f"진입={float(pos['entry_price']):,.3f}원 고점={highest:,.3f}원 단계={phase}"
+            )
 
     while True:
         try:
@@ -746,6 +795,7 @@ def run():
                             recent_pnls.append(final_pnl)
                             if final_pnl < 0:
                                 loss_coins[coin] = time.time()
+                                save_loss_coins(loss_coins)
                             pos = None; highest = 0.0; phase = 1
                             sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
                             cooldown_end = time.time() + COOLDOWN_SEC
@@ -778,6 +828,7 @@ def run():
                             recent_pnls.append(final_pnl)
                             if final_pnl < 0:
                                 loss_coins[coin] = time.time()
+                                save_loss_coins(loss_coins)
                             pos = None; highest = 0.0; phase = 1
                             sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
                             cooldown_end = time.time() + COOLDOWN_SEC
@@ -830,6 +881,7 @@ def run():
                         recent_pnls.append(final_pnl)
                         if final_pnl < 0:
                             loss_coins[coin] = time.time()
+                            save_loss_coins(loss_coins)
                             log.info(f"[학습] {coin} 손실 → {LOSS_COIN_COOLDOWN_SEC//3600}시간 재진입 차단")
 
                         if len(recent_pnls) == STRICT_WINDOW:
