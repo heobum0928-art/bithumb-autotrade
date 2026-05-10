@@ -40,9 +40,9 @@ WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 2.0
 SCAN_SEC             = 2
 WINDOW_SEC           = 60
-PRICE_THRESH         = 0.02
-VOLUME_MULT          = 3.0
-ALT_ENTRY_RATIO      = 0.30
+PRICE_THRESH         = 0.03   # 2% → 3%
+VOLUME_MULT          = 5.0   # 3x → 5x
+ALT_ENTRY_RATIO      = 0.15  # 30% → 15%
 TP_HALF              = 0.04
 TRAIL_PCT            = 0.025
 TIGHT_TRAIL          = 0.015
@@ -56,6 +56,8 @@ BTC_DROP_LIMIT       = -0.015
 OB_BID_RATIO         = 1.5
 TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
+
+HARD_STOP_PCT        = -0.02  # 진입가 대비 -2% 하드 스탑
 
 LOSS_COIN_COOLDOWN_SEC = 4 * 3600
 STRICT_WINDOW        = 5
@@ -600,6 +602,37 @@ def run():
                     )
                     save_active(pos, highest, phase, sold_vol, recv_krw, trail)
 
+                    # 하드 스탑: 진입가 대비 -2% 즉시 손절
+                    if pnl_pct <= HARD_STOP_PCT:
+                        reason   = f"하드스탑 {pnl_pct*100:+.1f}% (진입가 -{abs(HARD_STOP_PCT)*100:.0f}%)"
+                        received = do_sell(client, pos, total_vol - sold_vol, reason)
+                        if received is not None:
+                            recv_krw += received
+                        final_pnl     = recv_krw - total_cost
+                        final_pnl_pct = final_pnl / total_cost * 100
+                        log.info(f"[{coin}] 하드스탑 청산 | PnL={final_pnl:+,.0f}원 ({final_pnl_pct:+.2f}%)")
+                        notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
+                        try:
+                            log_trade(
+                                coin=coin, market=pos["market"],
+                                entry_price=entry, exit_price=current,
+                                volume=total_vol, cost_krw=total_cost,
+                                received_krw=recv_krw, exit_reason=reason,
+                                entered_at=pos["entered_at"], exited_at=datetime.now(),
+                            )
+                        except Exception as e:
+                            log.error(f"[DB] 저장 실패: {e}")
+                        clear_active()
+                        daily_pnl += final_pnl
+                        recent_pnls.append(final_pnl)
+                        if final_pnl < 0:
+                            loss_coins[coin] = time.time()
+                        pos = None; highest = 0.0; phase = 1
+                        sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                        cooldown_end = time.time() + COOLDOWN_SEC
+                        time.sleep(SCAN_SEC)
+                        continue
+
                     # 1차 익절
                     if phase == 1 and pnl_pct >= TP_HALF:
                         received = do_sell(client, pos, half_vol,
@@ -743,6 +776,20 @@ def run():
                 log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
                 time.sleep(SCAN_SEC)
                 continue
+
+            # ── 진입 확인 딜레이: 12초 대기 후 가격 유지 확인 ────────────────
+            signal_price = best["price"]
+            log.info(f"[{coin}] 12초 확인 대기 중... (신호가={signal_price:,.3f}원)")
+            time.sleep(12)
+            confirm_price = get_price(client, coin)
+            if confirm_price <= 0 or confirm_price < signal_price * 0.99:
+                log.info(
+                    f"[{coin}] 확인 실패 - 가격 하락 "
+                    f"({signal_price:,.3f} → {confirm_price:,.3f}) - 진입 취소"
+                )
+                time.sleep(SCAN_SEC)
+                continue
+            log.info(f"[{coin}] 확인 완료 - 가격 유지 ({confirm_price:,.3f}원) → 진입")
 
             avail   = get_available_krw(client)
             buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
