@@ -74,7 +74,10 @@ NEW_LIST_STOP     = -0.05  # 손절 -5%
 NEW_LIST_HOLD_MIN = 120    # 최소 보유 2분
 NEW_LIST_SCAN_SEC = 10     # 신규 코인 체크 주기 (초)
 
-LOSS_COIN_COOLDOWN_SEC = 4 * 3600
+# 코인별 누적 손실 학습 (횟수별 차단 시간)
+LOSS_CD = {1: 4*3600, 2: 24*3600, 3: 72*3600}  # 1회=4h, 2회=24h, 3회+=72h
+LOSS_CD_BIG    = 48 * 3600  # -5% 이상 큰 손실
+LOSS_CD_PUMP   = 72 * 3600  # 펌프덤프 패턴
 STRICT_WINDOW        = 5
 STRICT_LOSS_CNT      = 3
 STRICT_MULT          = 1.3
@@ -138,9 +141,43 @@ def load_loss_coins() -> dict:
     if not LOSS_COINS_FILE.exists():
         return {}
     try:
-        return json.loads(LOSS_COINS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(LOSS_COINS_FILE.read_text(encoding="utf-8"))
+        # 구 포맷 {coin: float} → 신 포맷 {coin: {count, until}} 마이그레이션
+        migrated = {}
+        for coin, val in data.items():
+            if isinstance(val, (int, float)):
+                migrated[coin] = {"count": 1, "until": val + LOSS_CD[1]}
+            else:
+                migrated[coin] = val
+        return migrated
     except Exception:
         return {}
+
+
+def record_loss_coin(loss_coins: dict, coin: str,
+                     pnl_pct: float, exit_reason: str) -> dict:
+    """누적 손실 횟수에 따라 차단 기간을 점진적으로 늘린다."""
+    prev = loss_coins.get(coin, {})
+    count = prev.get("count", 0) + 1
+
+    # 패턴별 최소 차단 시간 결정
+    is_pump = ("초기손절" in exit_reason and pnl_pct < -0.03)
+    is_big  = (pnl_pct <= -0.05)
+
+    base_cd = LOSS_CD.get(count, LOSS_CD[3])
+    if is_pump:
+        cd = max(base_cd, LOSS_CD_PUMP)
+        label = "펌프덤프"
+    elif is_big:
+        cd = max(base_cd, LOSS_CD_BIG)
+        label = "대형손실"
+    else:
+        cd = base_cd
+        label = f"{count}회손실"
+
+    loss_coins[coin] = {"count": count, "until": time.time() + cd}
+    log.info(f"[학습] {coin} {label} → {cd//3600}시간 재진입 차단 (총 {count}회)")
+    return loss_coins
 
 
 # ── 실시간 가격 추적기 ─────────────────────────────────────────────────────────
@@ -835,7 +872,8 @@ def run():
                             daily_pnl += final_pnl
                             recent_pnls.append(final_pnl)
                             if final_pnl < 0:
-                                loss_coins[coin] = time.time()
+                                loss_coins = record_loss_coin(
+                                    loss_coins, coin, final_pnl_pct, reason)
                                 save_loss_coins(loss_coins)
                                 report_loss(coin, final_pnl, final_pnl_pct,
                                             int(hold_elapsed), reason, entry_type)
@@ -875,7 +913,8 @@ def run():
                             daily_pnl += final_pnl
                             recent_pnls.append(final_pnl)
                             if final_pnl < 0:
-                                loss_coins[coin] = time.time()
+                                loss_coins = record_loss_coin(
+                                    loss_coins, coin, final_pnl_pct, reason)
                                 save_loss_coins(loss_coins)
                                 report_loss(coin, final_pnl, final_pnl_pct,
                                             int(hold_elapsed), reason, entry_type)
@@ -933,9 +972,9 @@ def run():
                         # 손실 학습
                         recent_pnls.append(final_pnl)
                         if final_pnl < 0:
-                            loss_coins[coin] = time.time()
+                            loss_coins = record_loss_coin(
+                                loss_coins, coin, final_pnl_pct, reason)
                             save_loss_coins(loss_coins)
-                            log.info(f"[학습] {coin} 손실 → {LOSS_COIN_COOLDOWN_SEC//3600}시간 재진입 차단")
                             report_loss(coin, final_pnl, final_pnl_pct,
                                         int(hold_elapsed), reason, entry_type)
 
@@ -1026,8 +1065,8 @@ def run():
                 log.info(f"[보유중] {', '.join(holdings)} - 해당 코인 신호 무시")
 
             now_ts     = time.time()
-            loss_coins = {c: ts for c, ts in loss_coins.items()
-                          if now_ts - ts < LOSS_COIN_COOLDOWN_SEC}
+            loss_coins = {c: v for c, v in loss_coins.items()
+                          if now_ts < v.get("until", 0)}
 
             found = []
             for coin in tracker.coins():
