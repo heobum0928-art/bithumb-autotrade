@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import init_db, log_trade, DB_PATH
+from bithumb.db import init_db, log_trade, log_signal, DB_PATH
 from bithumb import notify
 
 logging.basicConfig(
@@ -1051,6 +1051,11 @@ def run():
                                         f"{highest:,.3f}원 TP={NEW_LIST_TP_PCT*100:.0f}% "
                                         f"트레일={trail*100:.0f}%"
                                     )
+                                    try:
+                                        log_signal(nc, pos["entered_at"], "newlisting",
+                                                   None, None, False)
+                                    except Exception:
+                                        pass
                                     time.sleep(SCAN_SEC)
                                     continue
                 except Exception as e:
@@ -1200,6 +1205,11 @@ def run():
             trail    = TRAIL_PCT
             daily_trades += 1
             save_active(pos, highest, phase, sold_vol, recv_krw, trail)
+            try:
+                log_signal(coin, pos["entered_at"], "regular",
+                           best["price_chg"] * 100, best["vol_mult"], strict_mode)
+            except Exception:
+                pass
             log.info(
                 f"[{coin}] 모니터링 시작 | "
                 f"진입={highest:,.3f}원 TP={TP_HALF*100:.0f}% 트레일={trail*100:.1f}%"

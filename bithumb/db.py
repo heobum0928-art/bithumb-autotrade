@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS daily_params (
     entry_ratio   REAL,
     note          TEXT
 );
+CREATE TABLE IF NOT EXISTS signal_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    entered_at    TEXT    NOT NULL,
+    coin          TEXT    NOT NULL,
+    entry_type    TEXT    NOT NULL,
+    price_chg_pct REAL,
+    vol_mult      REAL,
+    hour_kst      INTEGER,
+    strict_mode   INTEGER DEFAULT 0
+);
 """
 
 
@@ -92,6 +102,20 @@ def log_trade(
             row,
         )
     log.info(f"[DB] 거래 저장: {coin} PnL={pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%) [{exit_reason}]")
+
+
+def log_signal(coin: str, entered_at: datetime, entry_type: str,
+               price_chg_pct: float | None, vol_mult: float | None,
+               strict_mode: bool = False) -> None:
+    hour = entered_at.hour if isinstance(entered_at, datetime) else datetime.now().hour
+    with _conn() as con:
+        con.execute(
+            """INSERT INTO signal_log
+               (entered_at, coin, entry_type, price_chg_pct, vol_mult, hour_kst, strict_mode)
+               VALUES (?,?,?,?,?,?,?)""",
+            (entered_at.isoformat() if isinstance(entered_at, datetime) else str(entered_at),
+             coin, entry_type, price_chg_pct, vol_mult, hour, int(strict_mode)),
+        )
 
 
 def log_params(params: dict) -> None:
