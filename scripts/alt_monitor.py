@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
 from bithumb.db import init_db, log_trade, log_signal, DB_PATH
+from bithumb.indicators import snapshot as indicator_snapshot
 from bithumb import notify
 
 logging.basicConfig(
@@ -1191,12 +1192,15 @@ def run():
                 f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
 
+            # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
+            _indic = indicator_snapshot(client, f"KRW-{coin}")
+
             if not check_orderbook(client, coin):
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="호가불균형")
+                               skip_reason="호가불균형", **_indic)
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1206,7 +1210,7 @@ def run():
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="체결강도미달")
+                               skip_reason="체결강도미달", **_indic)
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1225,7 +1229,7 @@ def run():
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="확인딜레이실패")
+                               skip_reason="확인딜레이실패", **_indic)
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1255,7 +1259,8 @@ def run():
             save_active(pos, highest, phase, sold_vol, recv_krw, trail)
             try:
                 log_signal(coin, pos["entered_at"], "regular",
-                           best["price_chg"] * 100, best["vol_mult"], strict_mode)
+                           best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                           **_indic)
             except Exception:
                 pass
             log.info(

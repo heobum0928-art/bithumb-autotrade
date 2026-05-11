@@ -25,6 +25,7 @@ def run(days: int | None) -> None:
 
     rows = con.execute(f"""
         SELECT s.entry_type, s.price_chg_pct, s.vol_mult, s.hour_kst, s.strict_mode,
+               s.rsi, s.bb_pct, s.macd_bull,
                t.pnl_pct, t.exit_reason, t.hold_seconds
         FROM signal_log s
         JOIN trades t ON s.coin = t.coin
@@ -105,7 +106,53 @@ def run(days: int | None) -> None:
         by_price.setdefault(key, []).append(r)
     table("진입 시 가격변화율", by_price)
 
-    # 5. 엄격모드 여부
+    # 5. RSI 구간별
+    by_rsi: dict = {}
+    for r in rows:
+        rsi = r["rsi"]
+        if rsi is None:
+            key = "N/A"
+        elif rsi < 40:
+            key = "RSI<40 (과매도)"
+        elif rsi < 60:
+            key = "RSI 40~60"
+        elif rsi < 70:
+            key = "RSI 60~70"
+        else:
+            key = "RSI 70+ (과매수)"
+        by_rsi.setdefault(key, []).append(r)
+    table("RSI 구간", by_rsi)
+
+    # 6. 볼린저밴드 %B 구간별
+    by_bb: dict = {}
+    for r in rows:
+        bb = r["bb_pct"]
+        if bb is None:
+            key = "N/A"
+        elif bb < 0.5:
+            key = "%B<0.5 (하단)"
+        elif bb < 0.8:
+            key = "%B 0.5~0.8"
+        elif bb < 1.0:
+            key = "%B 0.8~1.0"
+        else:
+            key = "%B 1.0+ (돌파)"
+        by_bb.setdefault(key, []).append(r)
+    table("볼린저밴드 %B", by_bb)
+
+    # 7. MACD 방향
+    by_macd: dict = {}
+    for r in rows:
+        if r["macd_bull"] is None:
+            key = "N/A"
+        elif r["macd_bull"]:
+            key = "MACD 상승"
+        else:
+            key = "MACD 하락"
+        by_macd.setdefault(key, []).append(r)
+    table("MACD 방향", by_macd)
+
+    # 8. 엄격모드 여부
     by_strict: dict = {}
     for r in rows:
         key = "엄격모드" if r["strict_mode"] else "일반"

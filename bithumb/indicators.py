@@ -1,0 +1,77 @@
+"""Technical indicator calculations from candle data."""
+
+
+def _closes(candles: list[dict]) -> list[float]:
+    """Extract close prices in chronological order (candles are newest-first)."""
+    return [float(c["trade_price"]) for c in reversed(candles)]
+
+
+def calc_rsi(candles: list[dict], period: int = 14) -> float | None:
+    closes = _closes(candles)
+    if len(closes) < period + 1:
+        return None
+    closes = closes[-(period + 1):]
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - 100 / (1 + rs), 2)
+
+
+def calc_bb_pct(candles: list[dict], period: int = 20, std_mult: float = 2.0) -> float | None:
+    """Bollinger Band %B: 0=lower band, 1=upper band, >1=above upper."""
+    closes = _closes(candles)
+    if len(closes) < period:
+        return None
+    closes = closes[-period:]
+    mean = sum(closes) / period
+    std = (sum((c - mean) ** 2 for c in closes) / period) ** 0.5
+    if std == 0:
+        return None
+    upper = mean + std_mult * std
+    lower = mean - std_mult * std
+    current = closes[-1]
+    return round((current - lower) / (upper - lower), 3)
+
+
+def calc_macd_bull(candles: list[dict],
+                   fast: int = 12, slow: int = 26, signal: int = 9) -> bool | None:
+    """Return True if MACD line > Signal line (bullish momentum)."""
+    closes = _closes(candles)
+    if len(closes) < slow + signal:
+        return None
+
+    def ema(data: list[float], n: int) -> list[float]:
+        k = 2 / (n + 1)
+        result = [data[0]]
+        for price in data[1:]:
+            result.append(price * k + result[-1] * (1 - k))
+        return result
+
+    fast_ema = ema(closes, fast)
+    slow_ema = ema(closes, slow)
+    macd_line = [f - s for f, s in zip(fast_ema[slow - fast:], slow_ema)]
+    if len(macd_line) < signal:
+        return None
+    signal_line = ema(macd_line, signal)
+    return macd_line[-1] > signal_line[-1]
+
+
+def snapshot(client, market: str) -> dict:
+    """Fetch 35 1-min candles and return indicator dict. Never raises."""
+    result = {"rsi": None, "bb_pct": None, "macd_bull": None}
+    try:
+        candles = client.get_candles(market, unit=1, count=35)
+        result["rsi"] = calc_rsi(candles)
+        result["bb_pct"] = calc_bb_pct(candles)
+        mb = calc_macd_bull(candles)
+        result["macd_bull"] = (1 if mb else 0) if mb is not None else None
+    except Exception:
+        pass
+    return result
