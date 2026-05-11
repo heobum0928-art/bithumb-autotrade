@@ -400,7 +400,7 @@ def get_holdings(client: BithumbClient) -> set[str]:
     try:
         for a in client.get_accounts():
             cur = a["currency"]
-            if cur in ("KRW", "P"):
+            if cur in ("KRW", "P") or cur in SKIP_COINS:
                 continue
             bal = float(a.get("balance", 0))
             if bal <= 0:
