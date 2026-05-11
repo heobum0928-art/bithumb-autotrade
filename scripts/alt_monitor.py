@@ -883,6 +883,36 @@ def run():
                             time.sleep(SCAN_SEC)
                             continue
 
+                        # 수익 중(+2% 이상)이면 10분 관계없이 트레일 스탑 적용
+                        if pnl_pct >= TP_HALF and current <= trail_stop:
+                            reason = (f"조기트레일 {pnl_pct*100:+.1f}% "
+                                      f"(고점 {highest:,.3f}원 -{trail*100:.1f}%, {hold_min:.0f}분)")
+                            received = do_sell(client, pos, total_vol - sold_vol, reason)
+                            if received is not None:
+                                recv_krw += received
+                            final_pnl     = recv_krw - total_cost
+                            final_pnl_pct = final_pnl / total_cost * 100
+                            log.info(f"[{coin}] 조기트레일 | PnL={final_pnl:+,.0f}원 ({final_pnl_pct:+.2f}%)")
+                            notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
+                            try:
+                                log_trade(
+                                    coin=coin, market=pos["market"],
+                                    entry_price=entry, exit_price=current,
+                                    volume=total_vol, cost_krw=total_cost,
+                                    received_krw=recv_krw, exit_reason=reason,
+                                    entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                )
+                            except Exception as e:
+                                log.error(f"[DB] 저장 실패: {e}")
+                            clear_active()
+                            daily_pnl += final_pnl
+                            recent_pnls.append(final_pnl)
+                            pos = None; highest = 0.0; phase = 1
+                            sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                            cooldown_end = time.time() + COOLDOWN_SEC
+                            time.sleep(SCAN_SEC)
+                            continue
+
                         # 급락 손절 (신규상장 -5%, 선진입 -3%, 일반 -5%)
                         stop_pct = (NEW_LIST_STOP    if entry_type == "newlisting"
                                     else PRE_HARD_STOP if entry_type == "preemptive"
