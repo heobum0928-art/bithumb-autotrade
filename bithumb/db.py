@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS signal_log (
     price_chg_pct REAL,
     vol_mult      REAL,
     hour_kst      INTEGER,
-    strict_mode   INTEGER DEFAULT 0
+    strict_mode   INTEGER DEFAULT 0,
+    skip_reason   TEXT
 );
 """
 
@@ -106,15 +107,15 @@ def log_trade(
 
 def log_signal(coin: str, entered_at: datetime, entry_type: str,
                price_chg_pct: float | None, vol_mult: float | None,
-               strict_mode: bool = False) -> None:
+               strict_mode: bool = False, skip_reason: str | None = None) -> None:
     hour = entered_at.hour if isinstance(entered_at, datetime) else datetime.now().hour
     with _conn() as con:
         con.execute(
             """INSERT INTO signal_log
-               (entered_at, coin, entry_type, price_chg_pct, vol_mult, hour_kst, strict_mode)
-               VALUES (?,?,?,?,?,?,?)""",
+               (entered_at, coin, entry_type, price_chg_pct, vol_mult, hour_kst, strict_mode, skip_reason)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (entered_at.isoformat() if isinstance(entered_at, datetime) else str(entered_at),
-             coin, entry_type, price_chg_pct, vol_mult, hour, int(strict_mode)),
+             coin, entry_type, price_chg_pct, vol_mult, hour, int(strict_mode), skip_reason),
         )
 
 

@@ -1193,10 +1193,22 @@ def run():
 
             if not check_orderbook(client, coin):
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason="호가불균형")
+                except Exception:
+                    pass
                 time.sleep(SCAN_SEC)
                 continue
             if not check_tick_ratio(client, coin, tracker):
                 log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason="체결강도미달")
+                except Exception:
+                    pass
                 time.sleep(SCAN_SEC)
                 continue
 
@@ -1210,6 +1222,12 @@ def run():
                     f"[{coin}] 확인 실패 - 가격 하락 "
                     f"({signal_price:,.3f} → {confirm_price:,.3f}) - 진입 취소"
                 )
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason="확인딜레이실패")
+                except Exception:
+                    pass
                 time.sleep(SCAN_SEC)
                 continue
             log.info(f"[{coin}] 확인 완료 - 가격 유지 ({confirm_price:,.3f}원) → 진입")

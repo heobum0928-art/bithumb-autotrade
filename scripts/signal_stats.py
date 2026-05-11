@@ -112,6 +112,25 @@ def run(days: int | None) -> None:
         by_strict.setdefault(key, []).append(r)
     table("엄격모드", by_strict)
 
+    # 6. 스킵 로그 분석 (진입 안 한 케이스)
+    skip_filter = f"AND date(s.entered_at) >= date('now', '-{days} days')" if days else ""
+    skips = con.execute(f"""
+        SELECT s.coin, s.skip_reason, s.price_chg_pct, s.vol_mult, s.hour_kst, s.entered_at
+        FROM signal_log s
+        WHERE s.entry_type = 'skipped' {skip_filter}
+        ORDER BY s.entered_at DESC
+    """).fetchall()
+
+    if skips:
+        print(f"\n[스킵 로그 — 신호 났지만 진입 안 한 케이스 ({len(skips)}건)]")
+        print(f"  {'사유':<14} {'건수':>4}")
+        print(f"  {'-'*22}")
+        by_skip: dict = {}
+        for s in skips:
+            by_skip.setdefault(s["skip_reason"] or "기타", []).append(s)
+        for reason, items in sorted(by_skip.items(), key=lambda x: -len(x[1])):
+            print(f"  {reason:<14} {len(items):>4}건")
+
     print(f"\n{'='*55}\n")
 
 
