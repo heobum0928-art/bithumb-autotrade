@@ -47,7 +47,7 @@ TP_HALF              = 0.02   # 빠른 익절 +2%
 TRAIL_PCT            = 0.02   # 트레일 2%
 TIGHT_TRAIL          = 0.015  # 2차 트레일 1.5%
 HOLD_MIN_SEC         = 600    # 진입 후 최소 10분 보유
-INITIAL_STOP_PCT     = -0.05  # 초기 보유 중 급락 손절 -5%
+INITIAL_STOP_PCT     = -0.03  # 초기 보유 중 급락 손절 -3% (펌프덤프 대응)
 DAILY_LIMIT_PCT      = -0.05
 MIN_KRW              = 5001
 COOLDOWN_SEC         = 120
@@ -470,6 +470,35 @@ def check_tick_ratio(client: BithumbClient, coin: str,
         return True
 
 
+def report_loss(coin: str, pnl_krw: float, pnl_pct: float,
+                hold_sec: int, exit_reason: str, entry_type: str) -> None:
+    """손실 거래 발생 시 원인 분석 후 텔레그램 보고."""
+    hold_min = hold_sec / 60
+
+    if hold_min < 5 and pnl_pct < -0.03:
+        pattern = "펌프덤프 의심 — 진입 직후 급락"
+    elif hold_min < 10 and "초기손절" in exit_reason:
+        pattern = "초기 급락 손절 — 모멘텀 소멸 빠름"
+    elif "타임아웃" in exit_reason:
+        pattern = "선진입 타임아웃 — 거래량 신호 후 가격 미추종"
+    elif "트레일링" in exit_reason and pnl_pct < 0:
+        pattern = "트레일링 손절 — 고점 후 되돌림"
+    else:
+        pattern = "기타 손실"
+
+    msg = (
+        f"<b>[손실 분석] {coin}</b>\n"
+        f"결과: {pnl_krw:+,.0f}원 ({pnl_pct*100:+.1f}%)\n"
+        f"보유: {hold_min:.0f}분 | 진입: {entry_type}\n"
+        f"사유: {exit_reason}\n"
+        f"패턴: <b>{pattern}</b>"
+    )
+    try:
+        notify.send(msg, force=True)
+    except Exception as e:
+        log.error(f"[손실보고] 전송 실패: {e}")
+
+
 # ── 주문 ──────────────────────────────────────────────────────────────────────
 
 def wait_for_order(client: BithumbClient, uuid: str, timeout: int = 20) -> dict:
@@ -808,6 +837,8 @@ def run():
                             if final_pnl < 0:
                                 loss_coins[coin] = time.time()
                                 save_loss_coins(loss_coins)
+                                report_loss(coin, final_pnl, final_pnl_pct,
+                                            int(hold_elapsed), reason, entry_type)
                             pos = None; highest = 0.0; phase = 1
                             sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
                             cooldown_end = time.time() + COOLDOWN_SEC
@@ -846,6 +877,8 @@ def run():
                             if final_pnl < 0:
                                 loss_coins[coin] = time.time()
                                 save_loss_coins(loss_coins)
+                                report_loss(coin, final_pnl, final_pnl_pct,
+                                            int(hold_elapsed), reason, entry_type)
                             pos = None; highest = 0.0; phase = 1
                             sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
                             cooldown_end = time.time() + COOLDOWN_SEC
@@ -903,6 +936,8 @@ def run():
                             loss_coins[coin] = time.time()
                             save_loss_coins(loss_coins)
                             log.info(f"[학습] {coin} 손실 → {LOSS_COIN_COOLDOWN_SEC//3600}시간 재진입 차단")
+                            report_loss(coin, final_pnl, final_pnl_pct,
+                                        int(hold_elapsed), reason, entry_type)
 
                         if len(recent_pnls) == STRICT_WINDOW:
                             losses = sum(1 for p in recent_pnls if p < 0)
@@ -1093,8 +1128,8 @@ def run():
 
             # ── 진입 확인 딜레이: 12초 대기 후 가격 유지 확인 ────────────────
             signal_price = best["price"]
-            log.info(f"[{coin}] 12초 확인 대기 중... (신호가={signal_price:,.3f}원)")
-            time.sleep(12)
+            log.info(f"[{coin}] 30초 확인 대기 중... (신호가={signal_price:,.3f}원)")
+            time.sleep(30)
             confirm_price = get_price(client, coin)
             if confirm_price <= 0 or confirm_price < signal_price * 0.99:
                 log.info(
