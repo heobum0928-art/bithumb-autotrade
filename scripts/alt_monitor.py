@@ -42,7 +42,7 @@ WS_MIN_INTERVAL      = 1.0
 SCAN_SEC             = 1
 WINDOW_SEC           = 60
 PRICE_THRESH         = 0.03
-VOLUME_MULT          = 7.0
+VOLUME_MULT          = 5.0   # 7→5, RSI/MACD 복합 조건으로 보완
 ALT_ENTRY_RATIO      = 0.15
 TP_HALF              = 0.02   # 빠른 익절 +2%
 TRAIL_PCT            = 0.02   # 트레일 2%
@@ -304,6 +304,11 @@ class PriceTracker:
 
             r_rate   = r_vol / r_time
             o_rate   = o_vol / o_time
+
+            # 거래량 지속성: 이전 구간도 최소 활성화 확인 (완전 침묵 후 단발 스파이크 차단)
+            if o_rate * 60 < MIN_TRADE_KRW_PER_MIN * 0.3:
+                return None
+
             vol_mult = r_rate / o_rate if o_rate > 0 else 0
             if vol_mult < VOLUME_MULT:
                 return None
@@ -1194,6 +1199,32 @@ def run():
 
             # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
             _indic = indicator_snapshot(client, f"KRW-{coin}")
+
+            # RSI 필터: 과열(>75) 또는 침체(<45) 구간 차단
+            _rsi = _indic.get("rsi")
+            if _rsi is not None and (_rsi < 45 or _rsi > 75):
+                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~75) - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason=f"RSI범위외({_rsi:.0f})", **_indic)
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
+
+            # MACD 필터: 하락 추세 구간 차단 (None이면 데이터 부족 → 통과)
+            _macd = _indic.get("macd_bull")
+            if _macd is not None and not _macd:
+                log.info(f"[{coin}] MACD 하락 - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason="MACD하락", **_indic)
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
 
             if not check_orderbook(client, coin):
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
