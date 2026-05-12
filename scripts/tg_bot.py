@@ -66,14 +66,21 @@ def get_updates(offset: int) -> list:
 def cmd_status() -> str:
     lines = ["<b>[봇 상태]</b>"]
 
-    # 봇 프로세스 확인
+    # 봇 프로세스 확인 (Windows 호환)
     if LOCK_FILE.exists():
         try:
+            import subprocess
             pid = int(LOCK_FILE.read_text().strip())
-            os.kill(pid, 0)
-            lines.append(f"● 실행 중 (PID {pid})")
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True, text=True
+            )
+            if str(pid) in result.stdout:
+                lines.append(f"● 실행 중 (PID {pid})")
+            else:
+                lines.append("✗ 봇 종료됨 (lock 파일 있지만 프로세스 없음)")
         except Exception:
-            lines.append("✗ 봇 종료됨 (lock 파일 있지만 프로세스 없음)")
+            lines.append("✗ 봇 종료됨")
     else:
         lines.append("✗ 봇 종료됨")
 
