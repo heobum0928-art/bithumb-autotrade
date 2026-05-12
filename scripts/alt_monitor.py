@@ -1272,10 +1272,10 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # ── 진입 확인 딜레이: 12초 대기 후 가격 유지 확인 ────────────────
+            # ── 진입 확인 딜레이: 60초 대기 후 가격 유지 확인 ────────────────
             signal_price = best["price"]
-            log.info(f"[{coin}] 30초 확인 대기 중... (신호가={signal_price:,.3f}원)")
-            time.sleep(30)
+            log.info(f"[{coin}] 60초 확인 대기 중... (신호가={signal_price:,.3f}원)")
+            time.sleep(60)
             confirm_price = get_price(client, coin)
             if confirm_price <= 0 or confirm_price < signal_price * 0.99:
                 log.info(
