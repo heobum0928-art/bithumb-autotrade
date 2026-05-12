@@ -1226,6 +1226,31 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
+            # BB%B 필터: 볼린저밴드 상단 돌파(>1.0) 차단 - 이미 과열, 되돌림 위험
+            _bb = _indic.get("bb_pct")
+            if _bb is not None and _bb > 1.0:
+                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.0 과열 - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason=f"BB과열({_bb:.2f})", **_indic)
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
+
+            # 거래량 상한 필터: 15배 초과는 펌프덤프 특징
+            if best["vol_mult"] > 15.0:
+                log.info(f"[{coin}] 거래량 {best['vol_mult']:.1f}x > 15x 펌프덤프 의심 - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason=f"거래량과다({best['vol_mult']:.0f}x)", **_indic)
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
+
             if not check_orderbook(client, coin):
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
                 try:
