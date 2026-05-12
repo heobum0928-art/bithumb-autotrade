@@ -21,6 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+KIS_PATH = Path("C:/code/kis-autotrade")
+sys.path.insert(0, str(KIS_PATH))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [TG][%(levelname)s] %(message)s",
@@ -178,17 +181,69 @@ def cmd_pnl() -> str:
     return "\n".join(lines)
 
 
+def cmd_kis() -> str:
+    try:
+        import os as _os
+        orig = _os.getcwd()
+        _os.chdir(str(KIS_PATH))
+        from kis.portfolio import get_account_state
+        state = get_account_state()
+        _os.chdir(orig)
+    except Exception as e:
+        return f"<b>[KIS]</b>\n조회 실패: {e}"
+
+    cash        = state.get("cash", 0)
+    total       = state.get("total_equity", 0)
+    holdings    = state.get("holdings", {})
+
+    lines = ["<b>[KIS 상태]</b>"]
+    lines.append(f"총 자산: <b>{total:,.0f}원</b>")
+    lines.append(f"현금: {cash:,.0f}원")
+
+    if holdings:
+        lines.append("\n<b>보유 종목:</b>")
+        for code, info in holdings.items():
+            qty       = info.get("qty", 0)
+            avg_price = info.get("avg_price", 0)
+            cost      = qty * avg_price
+            lines.append(f"  {code}: {qty}주 @ {avg_price:,.0f}원 (매입 {cost:,.0f}원)")
+    else:
+        lines.append("\n보유 종목: 없음")
+
+    # 쿨다운 확인
+    try:
+        import os as _os
+        orig = _os.getcwd()
+        _os.chdir(str(KIS_PATH))
+        from kis.stock_cooldown import load_loss_stocks
+        loss = load_loss_stocks()
+        _os.chdir(orig)
+        now = time.time()
+        active = {c: v for c, v in loss.items() if v.get("until", 0) > now}
+        if active:
+            lines.append("\n<b>쿨다운:</b>")
+            for c, v in active.items():
+                h = (v["until"] - now) / 3600
+                lines.append(f"  {c}: {h:.1f}h 남음")
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
 COMMANDS = {
     "/status": cmd_status,
     "/trades": cmd_trades,
     "/pnl":    cmd_pnl,
+    "/kis":    cmd_kis,
 }
 
 HELP_TEXT = (
     "<b>[명령어]</b>\n"
-    "/status — 봇 상태 · 포지션 · 쿨다운\n"
+    "/status — 빗썸 봇 상태 · 포지션 · 쿨다운\n"
     "/trades — 오늘 거래 내역\n"
-    "/pnl    — 최근 7일 손익"
+    "/pnl    — 최근 7일 손익\n"
+    "/kis    — KIS 계좌 · 보유 종목"
 )
 
 
