@@ -158,7 +158,6 @@ def cmd_pnl() -> str:
                COUNT(*) as cnt,
                SUM(CASE WHEN pnl_krw > 0 THEN 1 ELSE 0 END) as wins
         FROM trades
-        WHERE entry_type IS NULL OR entry_type != 'preemptive'
         GROUP BY d ORDER BY d DESC LIMIT 7
     """).fetchall()
     conn.close()
