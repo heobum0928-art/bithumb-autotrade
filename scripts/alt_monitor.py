@@ -74,6 +74,7 @@ NEW_LIST_TRAIL    = 0.07   # 트레일 7%
 NEW_LIST_STOP     = -0.05  # 손절 -5%
 NEW_LIST_HOLD_MIN = 120    # 최소 보유 2분
 NEW_LIST_SCAN_SEC = 10     # 신규 코인 체크 주기 (초)
+NEW_LIST_ENTRY_KRW = 500_000  # 신규 상장 전용 진입금액 (일반 15만원과 별도)
 
 # 코인별 누적 손실 학습 (횟수별 차단 시간)
 LOSS_CD = {1: 4*3600, 2: 24*3600, 3: 72*3600}  # 1회=4h, 2회=24h, 3회+=72h
@@ -1074,7 +1075,7 @@ def run():
                                 log.info(f"[{nc}] 신규 상장 감지됐지만 가격 0 — 거래 미개시, 대기")
                                 continue
                             avail   = get_available_krw(client)
-                            buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
+                            buy_krw = min(NEW_LIST_ENTRY_KRW, avail * 0.99)
                             if buy_krw >= MIN_KRW:
                                 new_pos = do_buy(client, nc, buy_krw)
                                 if new_pos:
