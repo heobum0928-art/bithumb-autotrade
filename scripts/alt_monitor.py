@@ -1068,6 +1068,11 @@ def run():
                         )
                         if (nc not in SKIP_COINS and nc not in loss_coins
                                 and daily_trades < MAX_DAILY_TRADES):
+                            # 첫 체결가 > 0 확인 (가격 0이면 거래 미개시)
+                            first_price = get_price(client, nc)
+                            if first_price <= 0:
+                                log.info(f"[{nc}] 신규 상장 감지됐지만 가격 0 — 거래 미개시, 대기")
+                                continue
                             avail   = get_available_krw(client)
                             buy_krw = min(capital * ALT_ENTRY_RATIO, avail * 0.99)
                             if buy_krw >= MIN_KRW:
