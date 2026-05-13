@@ -812,6 +812,7 @@ def run():
                                 cost_krw=total_cost, received_krw=recv_krw,
                                 exit_reason=reason,
                                 entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                max_price=highest,
                             )
                         except Exception as e:
                             log.error(f"[DB] 저장 실패: {e}")
@@ -872,6 +873,7 @@ def run():
                                     volume=total_vol, cost_krw=total_cost,
                                     received_krw=recv_krw, exit_reason=reason,
                                     entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                    max_price=highest,
                                 )
                             except Exception as e:
                                 log.error(f"[DB] 저장 실패: {e}")
@@ -908,6 +910,7 @@ def run():
                                     volume=total_vol, cost_krw=total_cost,
                                     received_krw=recv_krw, exit_reason=reason,
                                     entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                    max_price=highest,
                                 )
                             except Exception as e:
                                 log.error(f"[DB] 저장 실패: {e}")
@@ -943,6 +946,7 @@ def run():
                                     volume=total_vol, cost_krw=total_cost,
                                     received_krw=recv_krw, exit_reason=reason,
                                     entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                    max_price=highest,
                                 )
                             except Exception as e:
                                 log.error(f"[DB] 저장 실패: {e}")
@@ -999,6 +1003,7 @@ def run():
                                 volume=total_vol, cost_krw=total_cost,
                                 received_krw=recv_krw, exit_reason=reason,
                                 entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                max_price=highest,
                             )
                         except Exception as e:
                             log.error(f"[DB] 저장 실패: {e}")

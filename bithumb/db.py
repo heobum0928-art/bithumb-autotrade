@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_reason   TEXT,
     hold_seconds  INTEGER,
     entered_at    TEXT    NOT NULL,
-    exited_at     TEXT
+    exited_at     TEXT,
+    max_price     REAL,
+    max_pnl_pct   REAL
 );
 CREATE TABLE IF NOT EXISTS daily_params (
     date          TEXT    PRIMARY KEY,
@@ -65,6 +67,11 @@ def _conn() -> sqlite3.Connection:
 def init_db() -> None:
     with _conn() as con:
         con.executescript(CREATE_SQL)
+        for col, typ in [("max_price", "REAL"), ("max_pnl_pct", "REAL")]:
+            try:
+                con.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
+            except Exception:
+                pass
     log.debug("DB initialised")
 
 
@@ -79,9 +86,11 @@ def log_trade(
     exit_reason: str,
     entered_at: datetime,
     exited_at: datetime,
+    max_price: float = 0.0,
 ) -> None:
     pnl_krw = received_krw - cost_krw
     pnl_pct = pnl_krw / cost_krw * 100 if cost_krw else 0
+    max_pnl_pct = (max_price - entry_price) / entry_price * 100 if entry_price and max_price else 0
     if isinstance(entered_at, str):
         entered_at = datetime.fromisoformat(entered_at)
     if isinstance(exited_at, str):
@@ -95,17 +104,18 @@ def log_trade(
         pnl_krw, pnl_pct,
         exit_reason, hold_sec,
         entered_at.isoformat(), exited_at.isoformat(),
+        max_price, max_pnl_pct,
     )
     with _conn() as con:
         con.execute(
             """INSERT INTO trades
                (date,coin,market,entry_price,exit_price,volume,cost_krw,
                 received_krw,pnl_krw,pnl_pct,exit_reason,hold_seconds,
-                entered_at,exited_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                entered_at,exited_at,max_price,max_pnl_pct)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             row,
         )
-    log.info(f"[DB] 거래 저장: {coin} PnL={pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%) [{exit_reason}]")
+    log.info(f"[DB] 거래 저장: {coin} PnL={pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%) 최고={max_pnl_pct:+.1f}% [{exit_reason}]")
 
 
 def log_signal(coin: str, entered_at: datetime, entry_type: str,
