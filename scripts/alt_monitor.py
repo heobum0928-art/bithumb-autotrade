@@ -1200,14 +1200,14 @@ def run():
             # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
             _indic = indicator_snapshot(client, f"KRW-{coin}")
 
-            # RSI 필터: 과열(>75) 또는 침체(<45) 구간 차단
+            # RSI 필터: 과열(>80) 또는 침체(<45) 구간 차단
             _rsi = _indic.get("rsi")
-            if _rsi is not None and (_rsi < 45 or _rsi > 75):
-                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~75) - 진입 취소")
+            if _rsi is not None and (_rsi < 45 or _rsi > 80):
+                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~80) - 진입 취소")
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason=f"RSI범위외({_rsi:.0f})", **_indic)
+                               skip_reason=f"RSI범위외({_rsi:.0f})", **_indic)  # 45~80
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1226,10 +1226,10 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # BB%B 필터: 볼린저밴드 상단 돌파(>1.0) 차단 - 이미 과열, 되돌림 위험
+            # BB%B 필터: 볼린저밴드 과도 돌파(>1.1) 차단 - 극도 과열, 되돌림 위험
             _bb = _indic.get("bb_pct")
-            if _bb is not None and _bb > 1.0:
-                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.0 과열 - 진입 취소")
+            if _bb is not None and _bb > 1.1:
+                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.1 과열 - 진입 취소")
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
