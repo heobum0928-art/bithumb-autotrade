@@ -1211,14 +1211,14 @@ def run():
             # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
             _indic = indicator_snapshot(client, f"KRW-{coin}")
 
-            # RSI 필터: 과열(>80) 또는 침체(<45) 구간 차단
+            # RSI 필터: 과열(>85) 또는 침체(<45) 구간 차단
             _rsi = _indic.get("rsi")
-            if _rsi is not None and (_rsi < 45 or _rsi > 80):
-                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~80) - 진입 취소")
+            if _rsi is not None and (_rsi < 45 or _rsi > 85):
+                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~85) - 진입 취소")
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason=f"RSI범위외({_rsi:.0f})", **_indic)  # 45~80
+                               skip_reason=f"RSI범위외({_rsi:.0f})", **_indic)  # 45~85
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
