@@ -44,12 +44,12 @@ SCAN_SEC             = 1
 WINDOW_SEC           = 60
 PRICE_THRESH         = 0.03
 VOLUME_MULT          = 5.0   # 7→5, RSI/MACD 복합 조건으로 보완
-ALT_ENTRY_RATIO      = 0.10  # 0.15→0.10, 손실 최소화 (100,000원)
+ALT_ENTRY_RATIO      = 0.05  # 0.10→0.05, 손실 최소화 (50,000원)
 TP_HALF              = 0.015  # 빠른 익절 +1.5% (손실 방어 우선)
 TRAIL_PCT            = 0.02   # 트레일 2%
 TIGHT_TRAIL          = 0.015  # 2차 트레일 1.5%
 HOLD_MIN_SEC         = 600    # 진입 후 최소 10분 보유
-INITIAL_STOP_PCT     = -0.03  # 초기 보유 중 급락 손절 -3% (펌프덤프 대응)
+INITIAL_STOP_PCT     = -0.02  # 초기 보유 중 급락 손절 -2% (손실 최소화)
 DAILY_LIMIT_PCT      = -0.05
 MIN_KRW              = 5001
 COOLDOWN_SEC         = 120
@@ -1257,8 +1257,8 @@ def run():
 
             # RSI 필터: 과열(>85) 또는 침체(<45) 구간 차단
             _rsi = _indic.get("rsi")
-            if _rsi is not None and (_rsi < 45 or _rsi > 85):
-                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~85) - 진입 취소")
+            if _rsi is not None and (_rsi < 45 or _rsi > 90):
+                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~90) - 진입 취소")
                 try:
                     sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
@@ -1285,8 +1285,8 @@ def run():
 
             # BB%B 필터: 볼린저밴드 과도 돌파(>1.1) 차단 - 극도 과열, 되돌림 위험
             _bb = _indic.get("bb_pct")
-            if _bb is not None and _bb > 1.1:
-                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.1 과열 - 진입 취소")
+            if _bb is not None and _bb > 1.3:
+                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.3 과열 - 진입 취소")
                 try:
                     sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
@@ -1297,7 +1297,7 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # 거래량 상한 필터: 15배 초과는 펌프덤프 특징
+            # 거래량 상한 필터: 15배 초과는 펌프덤프 특징: 15배 초과는 펌프덤프 특징
             if best["vol_mult"] > 15.0:
                 log.info(f"[{coin}] 거래량 {best['vol_mult']:.1f}x > 15x 펌프덤프 의심 - 진입 취소")
                 try:
