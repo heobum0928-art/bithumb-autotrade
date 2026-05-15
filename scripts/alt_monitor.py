@@ -14,6 +14,7 @@ import time
 import json
 import logging
 import threading
+import queue
 import yaml
 from collections import deque
 from datetime import datetime, date, timedelta
@@ -22,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import init_db, log_trade, log_signal, DB_PATH
+from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, DB_PATH
 from bithumb.indicators import snapshot as indicator_snapshot
 from bithumb import notify
 
@@ -89,6 +90,48 @@ SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 STATE_FILE      = Path("data/active_pos.json")
 LOCK_FILE       = Path("data/bot.lock")
 LOSS_COINS_FILE = Path("data/loss_coins.json")
+
+
+# ── 신호 사후 추적 (차단된 신호의 5분/30분 후 가격 기록) ─────────────────────────
+_outcome_queue: queue.Queue = queue.Queue()
+
+
+def start_outcome_tracker(tracker: "PriceTracker") -> None:
+    def _run():
+        pending = []  # [signal_id, coin, signal_price, t5m, t30m, done5, done30]
+        while True:
+            try:
+                while True:
+                    pending.append(list(_outcome_queue.get_nowait()))
+            except queue.Empty:
+                pass
+
+            now = time.time()
+            still_pending = []
+            for item in pending:
+                sig_id, coin, sig_price, t5m, t30m, done5, done30 = item
+                if not done5 and now >= t5m:
+                    p = tracker.get_latest_price(coin)
+                    if p > 0:
+                        update_signal_outcome(sig_id, outcome_5m=(p - sig_price) / sig_price * 100)
+                    item[5] = True
+                if not done30 and now >= t30m:
+                    p = tracker.get_latest_price(coin)
+                    if p > 0:
+                        update_signal_outcome(sig_id, outcome_30m=(p - sig_price) / sig_price * 100)
+                    item[6] = True
+                if not item[6]:
+                    still_pending.append(item)
+            pending = still_pending
+            time.sleep(10)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def queue_outcome(signal_id: int, coin: str, signal_price: float) -> None:
+    if signal_id and signal_price > 0:
+        now = time.time()
+        _outcome_queue.put([signal_id, coin, signal_price, now + 300, now + 1800, False, False])
 
 
 # ── 프로세스 중복 방지 ─────────────────────────────────────────────────────────
@@ -668,6 +711,7 @@ def run():
     last_newlist_ts = 0.0
     log.info(f"[WS] {len(symbols)}개 코인 실시간 수신 시작 - 초기 데이터 수집 중...")
     time.sleep(5)
+    start_outcome_tracker(tracker)
 
     log.info("=== ALT 모멘텀 봇 시작 [논블로킹 단일루프] ===")
     log.info(
@@ -1216,9 +1260,10 @@ def run():
             if _rsi is not None and (_rsi < 45 or _rsi > 85):
                 log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~85) - 진입 취소")
                 try:
-                    log_signal(coin, datetime.now(), "skipped",
+                    sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason=f"RSI범위외({_rsi:.0f})", **_indic)  # 45~85
+                               skip_reason=f"RSI범위외({_rsi:.0f})", signal_price=best["price"], **_indic)
+                    queue_outcome(sid, coin, best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1229,9 +1274,10 @@ def run():
             if _macd is not None and not _macd:
                 log.info(f"[{coin}] MACD 하락 - 진입 취소")
                 try:
-                    log_signal(coin, datetime.now(), "skipped",
+                    sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="MACD하락", **_indic)
+                               skip_reason="MACD하락", signal_price=best["price"], **_indic)
+                    queue_outcome(sid, coin, best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1242,9 +1288,10 @@ def run():
             if _bb is not None and _bb > 1.1:
                 log.info(f"[{coin}] BB%B {_bb:.2f} > 1.1 과열 - 진입 취소")
                 try:
-                    log_signal(coin, datetime.now(), "skipped",
+                    sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason=f"BB과열({_bb:.2f})", **_indic)
+                               skip_reason=f"BB과열({_bb:.2f})", signal_price=best["price"], **_indic)
+                    queue_outcome(sid, coin, best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1254,9 +1301,10 @@ def run():
             if best["vol_mult"] > 15.0:
                 log.info(f"[{coin}] 거래량 {best['vol_mult']:.1f}x > 15x 펌프덤프 의심 - 진입 취소")
                 try:
-                    log_signal(coin, datetime.now(), "skipped",
+                    sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason=f"거래량과다({best['vol_mult']:.0f}x)", **_indic)
+                               skip_reason=f"거래량과다({best['vol_mult']:.0f}x)", signal_price=best["price"], **_indic)
+                    queue_outcome(sid, coin, best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1265,9 +1313,10 @@ def run():
             if not check_orderbook(client, coin):
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
                 try:
-                    log_signal(coin, datetime.now(), "skipped",
+                    sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="호가불균형", **_indic)
+                               skip_reason="호가불균형", signal_price=best["price"], **_indic)
+                    queue_outcome(sid, coin, best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
@@ -1275,9 +1324,10 @@ def run():
             if not check_tick_ratio(client, coin, tracker):
                 log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
                 try:
-                    log_signal(coin, datetime.now(), "skipped",
+                    sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="체결강도미달", **_indic)
+                               skip_reason="체결강도미달", signal_price=best["price"], **_indic)
+                    queue_outcome(sid, coin, best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)

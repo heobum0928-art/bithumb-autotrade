@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS signal_log (
     skip_reason   TEXT,
     rsi           REAL,
     bb_pct        REAL,
-    macd_bull     INTEGER
+    macd_bull     INTEGER,
+    signal_price  REAL,
+    outcome_5m    REAL,
+    outcome_30m   REAL
 );
 """
 
@@ -67,9 +70,15 @@ def _conn() -> sqlite3.Connection:
 def init_db() -> None:
     with _conn() as con:
         con.executescript(CREATE_SQL)
-        for col, typ in [("max_price", "REAL"), ("max_pnl_pct", "REAL")]:
+        for tbl, col, typ in [
+            ("trades",     "max_price",    "REAL"),
+            ("trades",     "max_pnl_pct",  "REAL"),
+            ("signal_log", "signal_price", "REAL"),
+            ("signal_log", "outcome_5m",   "REAL"),
+            ("signal_log", "outcome_30m",  "REAL"),
+        ]:
             try:
-                con.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}")
             except Exception:
                 pass
     log.debug("DB initialised")
@@ -122,18 +131,33 @@ def log_signal(coin: str, entered_at: datetime, entry_type: str,
                price_chg_pct: float | None, vol_mult: float | None,
                strict_mode: bool = False, skip_reason: str | None = None,
                rsi: float | None = None, bb_pct: float | None = None,
-               macd_bull: int | None = None) -> None:
+               macd_bull: int | None = None,
+               signal_price: float | None = None) -> int:
     hour = entered_at.hour if isinstance(entered_at, datetime) else datetime.now().hour
     with _conn() as con:
-        con.execute(
+        cur = con.execute(
             """INSERT INTO signal_log
                (entered_at, coin, entry_type, price_chg_pct, vol_mult, hour_kst,
-                strict_mode, skip_reason, rsi, bb_pct, macd_bull)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                strict_mode, skip_reason, rsi, bb_pct, macd_bull, signal_price)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (entered_at.isoformat() if isinstance(entered_at, datetime) else str(entered_at),
              coin, entry_type, price_chg_pct, vol_mult, hour,
-             int(strict_mode), skip_reason, rsi, bb_pct, macd_bull),
+             int(strict_mode), skip_reason, rsi, bb_pct, macd_bull, signal_price),
         )
+        return cur.lastrowid
+
+
+def update_signal_outcome(signal_id: int, outcome_5m: float = None, outcome_30m: float = None) -> None:
+    updates, vals = [], []
+    if outcome_5m is not None:
+        updates.append("outcome_5m = ?"); vals.append(outcome_5m)
+    if outcome_30m is not None:
+        updates.append("outcome_30m = ?"); vals.append(outcome_30m)
+    if not updates:
+        return
+    vals.append(signal_id)
+    with _conn() as con:
+        con.execute(f"UPDATE signal_log SET {', '.join(updates)} WHERE id = ?", vals)
 
 
 def log_params(params: dict) -> None:
