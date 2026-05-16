@@ -61,6 +61,12 @@ OB_BID_RATIO         = 1.5
 TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
 
+# 눌림목(풀백) 전략 파라미터
+PULLBACK_ENABLED     = True   # 즉시 매수 대신 눌림목 대기
+PULLBACK_TARGET_PCT  = -0.02  # 고점 대비 -2% 눌림 시 진입
+PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
+PULLBACK_ENTRY_KRW   = 30_000 # 소액 테스트 진입금액
+
 # 선진입(거래량 선행) 파라미터
 PRE_ENABLED          = False  # 데이터 기반 비활성화 (14% 승률, 손실 지속)
 PRE_VOL_MULT         = 12.0  # 최근 10초 거래량이 이전 대비 12배 (8→12, 가짜신호 감소)
@@ -94,6 +100,12 @@ LOSS_COINS_FILE = Path("data/loss_coins.json")
 
 # ── 신호 사후 추적 (차단된 신호의 5분/30분 후 가격 기록) ─────────────────────────
 _outcome_queue: queue.Queue = queue.Queue()
+_pump_cooldown: dict[str, float] = {}  # coin → last logged timestamp
+PUMP_COOLDOWN_SEC = 300  # 같은 코인 5분 내 재감지 무시
+
+# ── 눌림목 대기 큐 ─────────────────────────────────────────────────────────────
+_pullback_queue: queue.Queue = queue.Queue()  # 대기 코인 등록
+_entry_ready:    queue.Queue = queue.Queue()  # 눌림목 달성 → 메인루프 진입 신호
 
 
 def start_outcome_tracker(tracker: "PriceTracker") -> None:
@@ -217,6 +229,61 @@ def start_pump_tracker(tracker: "PriceTracker") -> None:
 
             pending = still
             time.sleep(10)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def queue_pullback(coin: str, peak_price: float) -> None:
+    """펌핑 감지 후 눌림목 대기 큐에 등록."""
+    _pullback_queue.put({"coin": coin, "peak": peak_price, "t0": time.time()})
+    log.info(f"[눌림목대기] {coin} 등록 | 고점={peak_price:,.3f}원 | -2% 기다리는 중...")
+
+
+def start_pullback_tracker(tracker: "PriceTracker") -> None:
+    """고점 추적 → -2% 눌림목 달성 시 메인루프에 진입 신호 전달."""
+    def _run():
+        pending: list[dict] = []
+        while True:
+            try:
+                while True:
+                    pending.append(_pullback_queue.get_nowait())
+            except queue.Empty:
+                pass
+
+            now = time.time()
+            still = []
+            for item in pending:
+                coin    = item["coin"]
+                elapsed = now - item["t0"]
+
+                if elapsed > PULLBACK_WAIT_SEC:
+                    log.info(f"[눌림목] {coin} {PULLBACK_WAIT_SEC}초 타임아웃 - 포기")
+                    continue
+
+                current = tracker.get_latest_price(coin)
+                if current <= 0:
+                    still.append(item)
+                    continue
+
+                # 고점 갱신
+                if current > item["peak"]:
+                    item["peak"] = current
+
+                drop = (current - item["peak"]) / item["peak"]
+                log.debug(f"[눌림목] {coin} 현재={current:,.3f} 고점={item['peak']:,.3f} 낙폭={drop*100:.1f}%")
+
+                if drop <= PULLBACK_TARGET_PCT:
+                    log.warning(
+                        f"[눌림목 달성] {coin} | 고점={item['peak']:,.3f}원 → "
+                        f"현재={current:,.3f}원 ({drop*100:.1f}%) → 진입 신호 전송"
+                    )
+                    _entry_ready.put({"coin": coin, "price": current})
+                    continue  # 대기 목록에서 제거 (진입 큐로 넘김)
+
+                still.append(item)
+
+            pending = still
+            time.sleep(2)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -813,6 +880,7 @@ def run():
     time.sleep(5)
     start_outcome_tracker(tracker)
     start_pump_tracker(tracker)
+    start_pullback_tracker(tracker)
 
     log.info("=== ALT 모멘텀 봇 시작 [논블로킹 단일루프] ===")
     log.info(
@@ -1194,10 +1262,45 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # ── 포지션 없음: 신호 탐색 ───────────────────────────────────────
+            # ── 포지션 없음: 눌림목 진입 신호 확인 ─────────────────────────
             if time.time() < cooldown_end:
                 time.sleep(SCAN_SEC)
                 continue
+
+            # 눌림목 달성 신호 처리
+            try:
+                pb_signal = _entry_ready.get_nowait()
+                pb_coin   = pb_signal["coin"]
+                pb_price  = pb_signal["price"]
+                if (pb_coin not in SKIP_COINS and pb_coin not in loss_coins
+                        and daily_trades < MAX_DAILY_TRADES):
+                    log.warning(
+                        f"*** [눌림목 진입] {pb_coin} | "
+                        f"눌림가={pb_price:,.3f}원 | {PULLBACK_ENTRY_KRW:,}원 ***"
+                    )
+                    avail   = get_available_krw(client)
+                    buy_krw = min(PULLBACK_ENTRY_KRW, avail * 0.99)
+                    if buy_krw >= MIN_KRW:
+                        new_pos = do_buy(client, pb_coin, buy_krw)
+                        if new_pos:
+                            new_pos["entry_type"] = "pullback"
+                            pos      = new_pos
+                            highest  = float(pos["entry_price"])
+                            phase    = 1
+                            sold_vol = 0.0
+                            recv_krw = 0.0
+                            trail    = TRAIL_PCT
+                            daily_trades += 1
+                            save_active(pos, highest, phase, sold_vol, recv_krw, trail)
+                            try:
+                                log_signal(pb_coin, pos["entered_at"], "pullback",
+                                           0.0, 0.0, strict_mode)
+                            except Exception:
+                                pass
+                            time.sleep(SCAN_SEC)
+                            continue
+            except queue.Empty:
+                pass
 
             scan_count += 1
             if scan_count % 6 == 0:
@@ -1353,13 +1456,18 @@ def run():
                 f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
 
-            # 펌핑 이벤트 경로 수집 (필터 전, 모든 펌핑 기록)
-            try:
-                _pid = log_pump(coin, datetime.now(), best["price"],
-                                best["price_chg"] * 100, best["vol_mult"])
-                queue_pump(_pid, coin, best["price"])
-            except Exception:
-                pass
+            # 펌핑 이벤트 경로 수집 (필터 전, 5분 내 중복 감지 무시)
+            _now_ts = time.time()
+            if _now_ts - _pump_cooldown.get(coin, 0) > PUMP_COOLDOWN_SEC:
+                try:
+                    _pid = log_pump(coin, datetime.now(), best["price"],
+                                    best["price_chg"] * 100, best["vol_mult"])
+                    queue_pump(_pid, coin, best["price"])
+                    _pump_cooldown[coin] = _now_ts
+                except Exception:
+                    _pid = None
+            else:
+                _pid = None
 
             # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
             _indic = indicator_snapshot(client, f"KRW-{coin}")
@@ -1442,7 +1550,21 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # ── 진입 확인 딜레이: 60초 대기 후 가격 유지 확인 ────────────────
+            # ── 눌림목 대기 등록 (즉시 매수 대신 -2% 기다림) ────────────────
+            if PULLBACK_ENABLED:
+                queue_pullback(coin, best["price"])
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason="눌림목대기", signal_price=best["price"], **_indic)
+                    if _pid:
+                        update_pump_path(_pid, entered=0)
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
+
+            # ── 즉시 진입 (PULLBACK_ENABLED=False 일 때만) ────────────────────
             signal_price = best["price"]
             log.info(f"[{coin}] 30초 확인 대기 중... (신호가={signal_price:,.3f}원)")
             time.sleep(30)
@@ -1474,7 +1596,6 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # 포지션 세팅
             pos      = new_pos
             highest  = float(pos["entry_price"])
             phase    = 1
@@ -1487,7 +1608,8 @@ def run():
                 log_signal(coin, pos["entered_at"], "regular",
                            best["price_chg"] * 100, best["vol_mult"], strict_mode,
                            **_indic)
-                update_pump_path(_pid, entered=1)
+                if _pid:
+                    update_pump_path(_pid, entered=1)
             except Exception:
                 pass
             log.info(
