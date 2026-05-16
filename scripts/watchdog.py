@@ -11,7 +11,7 @@ import logging
 import requests
 import yaml
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -59,9 +59,24 @@ def start_bot(name: str, script: Path) -> subprocess.Popen:
     return proc
 
 
+def write_session(target_date: str | None = None) -> None:
+    try:
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "session_writer.py")]
+            + ([target_date] if target_date else []),
+            cwd=str(ROOT), timeout=30,
+        )
+    except Exception as e:
+        log.warning(f"[session_writer] 실패: {e}")
+
+
 def main() -> None:
     log.info("=== 워치독 시작 ===")
     send_tg("🐕 워치독 시작 — 봇 자동 재시작 감시 중")
+
+    # 시작 시 오늘 세션 로그 생성
+    write_session()
+    last_date = date.today()
 
     procs: dict[str, subprocess.Popen] = {}
     for name, script in BOTS.items():
@@ -70,11 +85,21 @@ def main() -> None:
 
     while True:
         time.sleep(CHECK_INTERVAL)
+
+        # 날짜 바뀌면 전날 마무리 + 오늘 파일 생성
+        today = date.today()
+        if today != last_date:
+            write_session(last_date.isoformat())  # 전날 최종 기록
+            write_session()                        # 오늘 새 파일
+            last_date = today
+            log.info(f"[session] 날짜 변경 → {today} 세션 생성")
+
         for name, script in BOTS.items():
             proc = procs[name]
             if proc.poll() is not None:  # 프로세스 종료됨
                 log.warning(f"[{name}] 죽음 감지 (exit={proc.returncode}) → 재시작")
                 send_tg(f"⚠️ <b>{name}</b> 종료됨 → 자동 재시작")
+                write_session()  # 재시작 시점 기록 업데이트
                 time.sleep(2)
                 procs[name] = start_bot(name, script)
 
