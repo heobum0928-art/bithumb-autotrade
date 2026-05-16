@@ -57,6 +57,24 @@ CREATE TABLE IF NOT EXISTS signal_log (
     outcome_5m    REAL,
     outcome_30m   REAL
 );
+CREATE TABLE IF NOT EXISTS pump_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    detected_at   TEXT    NOT NULL,
+    coin          TEXT    NOT NULL,
+    base_price    REAL    NOT NULL,
+    pump_pct      REAL,
+    vol_mult      REAL,
+    price_1m      REAL,
+    price_2m      REAL,
+    price_3m      REAL,
+    price_5m      REAL,
+    peak_price    REAL,
+    peak_at_sec   INTEGER,
+    max_drop_pct  REAL,
+    pullback_2pct INTEGER DEFAULT 0,
+    bounce_after  INTEGER DEFAULT 0,
+    entered       INTEGER DEFAULT 0
+);
 """
 
 
@@ -145,6 +163,31 @@ def log_signal(coin: str, entered_at: datetime, entry_type: str,
              int(strict_mode), skip_reason, rsi, bb_pct, macd_bull, signal_price),
         )
         return cur.lastrowid
+
+
+def log_pump(coin: str, detected_at: datetime, base_price: float,
+             pump_pct: float, vol_mult: float) -> int:
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO pump_log (detected_at, coin, base_price, pump_pct, vol_mult)
+               VALUES (?,?,?,?,?)""",
+            (detected_at.isoformat() if isinstance(detected_at, datetime) else str(detected_at),
+             coin, base_price, pump_pct, vol_mult),
+        )
+        return cur.lastrowid
+
+
+def update_pump_path(pump_id: int, **kwargs) -> None:
+    allowed = {"price_1m", "price_2m", "price_3m", "price_5m",
+               "peak_price", "peak_at_sec", "max_drop_pct",
+               "pullback_2pct", "bounce_after", "entered"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return
+    cols = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values()) + [pump_id]
+    with _conn() as con:
+        con.execute(f"UPDATE pump_log SET {cols} WHERE id = ?", vals)
 
 
 def update_signal_outcome(signal_id: int, outcome_5m: float = None, outcome_30m: float = None) -> None:

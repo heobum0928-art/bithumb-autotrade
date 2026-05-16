@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, DB_PATH
+from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, log_pump, update_pump_path, DB_PATH
 from bithumb.indicators import snapshot as indicator_snapshot
 from bithumb import notify
 
@@ -49,7 +49,7 @@ TP_HALF              = 0.015  # 빠른 익절 +1.5% (손실 방어 우선)
 TRAIL_PCT            = 0.02   # 트레일 2%
 TIGHT_TRAIL          = 0.015  # 2차 트레일 1.5%
 HOLD_MIN_SEC         = 600    # 진입 후 최소 10분 보유
-INITIAL_STOP_PCT     = -0.02  # 초기 보유 중 급락 손절 -2% (손실 최소화)
+INITIAL_STOP_PCT     = -0.015  # 초기 보유 중 급락 손절 -1.5% (손실 최소화)
 DAILY_LIMIT_PCT      = -0.05
 MIN_KRW              = 5001
 COOLDOWN_SEC         = 120
@@ -132,6 +132,106 @@ def queue_outcome(signal_id: int, coin: str, signal_price: float) -> None:
     if signal_id and signal_price > 0:
         now = time.time()
         _outcome_queue.put([signal_id, coin, signal_price, now + 300, now + 1800, False, False])
+
+
+# ── 펌핑 경로 추적기 (눌림목 파라미터 도출용 데이터 수집) ──────────────────────
+_pump_queue: queue.Queue = queue.Queue()
+
+
+def start_pump_tracker(tracker: "PriceTracker") -> None:
+    def _run():
+        # item: [pump_id, coin, base_price, start_time,
+        #        peak_price, peak_at_sec, min_price_after_peak,
+        #        pullback_hit, bounce_hit,
+        #        done_1m, done_2m, done_3m, done_5m]
+        pending = []
+        while True:
+            try:
+                while True:
+                    pending.append(list(_pump_queue.get_nowait()))
+            except queue.Empty:
+                pass
+
+            now = time.time()
+            still = []
+            for item in pending:
+                (pid, coin, base, t0, peak, peak_sec,
+                 min_after_peak, pullback_hit, bounce_hit,
+                 d1, d2, d3, d5) = item
+
+                p = tracker.get_latest_price(coin)
+                elapsed = now - t0
+
+                if p > 0:
+                    # 고점 갱신
+                    if p > peak:
+                        item[4] = p
+                        item[5] = int(elapsed)
+                        peak = p
+
+                    # 고점 대비 낙폭 추적
+                    if peak > 0:
+                        drop = (p - peak) / peak * 100
+                        if drop < (item[6] or 0):  # 더 큰 낙폭 갱신
+                            item[6] = drop
+
+                        # -2% 눌림 발생 여부
+                        if not pullback_hit and drop <= -2.0:
+                            item[7] = True
+                            pullback_hit = True
+
+                        # 눌림 후 반등: -2% 눌린 뒤 -1% 이내로 회복
+                        if pullback_hit and not bounce_hit and drop >= -1.0:
+                            item[8] = True
+                            bounce_hit = True
+
+                # 시간별 가격 기록
+                updates = {}
+                if not d1 and elapsed >= 60:
+                    updates["price_1m"] = p if p > 0 else None
+                    item[9] = True
+                if not d2 and elapsed >= 120:
+                    updates["price_2m"] = p if p > 0 else None
+                    item[10] = True
+                if not d3 and elapsed >= 180:
+                    updates["price_3m"] = p if p > 0 else None
+                    item[11] = True
+                if not d5 and elapsed >= 300:
+                    updates["price_5m"] = p if p > 0 else None
+                    item[12] = True
+                    # 5분 완료 시 최종 집계 저장
+                    updates["peak_price"]    = item[4]
+                    updates["peak_at_sec"]   = item[5]
+                    updates["max_drop_pct"]  = item[6]
+                    updates["pullback_2pct"] = 1 if item[7] else 0
+                    updates["bounce_after"]  = 1 if item[8] else 0
+
+                if updates:
+                    try:
+                        update_pump_path(pid, **updates)
+                    except Exception:
+                        pass
+
+                if not item[12]:  # 5분 미완료면 계속 추적
+                    still.append(item)
+
+            pending = still
+            time.sleep(10)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def queue_pump(pump_id: int, coin: str, base_price: float) -> None:
+    if pump_id and base_price > 0:
+        now = time.time()
+        # [pump_id, coin, base_price, start_time,
+        #  peak_price, peak_at_sec, min_price_after_peak(낙폭최저),
+        #  pullback_hit, bounce_hit,
+        #  done_1m, done_2m, done_3m, done_5m]
+        _pump_queue.put([pump_id, coin, base_price, now,
+                         base_price, 0, 0.0,
+                         False, False,
+                         False, False, False, False])
 
 
 # ── 프로세스 중복 방지 ─────────────────────────────────────────────────────────
@@ -712,6 +812,7 @@ def run():
     log.info(f"[WS] {len(symbols)}개 코인 실시간 수신 시작 - 초기 데이터 수집 중...")
     time.sleep(5)
     start_outcome_tracker(tracker)
+    start_pump_tracker(tracker)
 
     log.info("=== ALT 모멘텀 봇 시작 [논블로킹 단일루프] ===")
     log.info(
@@ -1252,6 +1353,14 @@ def run():
                 f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
 
+            # 펌핑 이벤트 경로 수집 (필터 전, 모든 펌핑 기록)
+            try:
+                _pid = log_pump(coin, datetime.now(), best["price"],
+                                best["price_chg"] * 100, best["vol_mult"])
+                queue_pump(_pid, coin, best["price"])
+            except Exception:
+                pass
+
             # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
             _indic = indicator_snapshot(client, f"KRW-{coin}")
 
@@ -1335,8 +1444,8 @@ def run():
 
             # ── 진입 확인 딜레이: 60초 대기 후 가격 유지 확인 ────────────────
             signal_price = best["price"]
-            log.info(f"[{coin}] 60초 확인 대기 중... (신호가={signal_price:,.3f}원)")
-            time.sleep(60)
+            log.info(f"[{coin}] 30초 확인 대기 중... (신호가={signal_price:,.3f}원)")
+            time.sleep(30)
             confirm_price = get_price(client, coin)
             if confirm_price <= 0 or confirm_price < signal_price * 0.99:
                 log.info(
@@ -1378,6 +1487,7 @@ def run():
                 log_signal(coin, pos["entered_at"], "regular",
                            best["price_chg"] * 100, best["vol_mult"], strict_mode,
                            **_indic)
+                update_pump_path(_pid, entered=1)
             except Exception:
                 pass
             log.info(
