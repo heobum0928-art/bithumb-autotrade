@@ -1469,6 +1469,9 @@ def run():
                 f"거래량={best['vol_mult']:.1f}x | 오늘 {daily_trades+1}건 ***"
             )
 
+            # 신호 시점 기술지표 스냅샷 (먼저 fetch — 눌림목 RSI 체크에도 활용)
+            _indic = indicator_snapshot(client, f"KRW-{coin}")
+
             # 펌핑 이벤트 경로 수집 (필터 전, 5분 내 중복 감지 무시)
             _now_ts = time.time()
             if _now_ts - _pump_cooldown.get(coin, 0) > PUMP_COOLDOWN_SEC:
@@ -1479,14 +1482,13 @@ def run():
                     _pump_cooldown[coin] = _now_ts
                 except Exception:
                     _pid = None
-                # 눌림목 대기 등록 (필터 전 — RSI/BB 관계없이 모든 펌핑 추적)
+                # 눌림목 대기: RSI 90 초과(극도 과열)만 제외, 과매도(45↓)는 허용
                 if PULLBACK_ENABLED:
-                    queue_pullback(coin, best["price"])
+                    _rsi_pb = _indic.get("rsi")
+                    if _rsi_pb is None or _rsi_pb <= 90:
+                        queue_pullback(coin, best["price"])
             else:
                 _pid = None
-
-            # 신호 시점 기술지표 스냅샷 (1회 fetch, 이후 재사용)
-            _indic = indicator_snapshot(client, f"KRW-{coin}")
 
             # RSI 필터: 과열(>85) 또는 침체(<45) 구간 차단
             _rsi = _indic.get("rsi")
