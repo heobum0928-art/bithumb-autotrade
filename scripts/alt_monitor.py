@@ -1479,6 +1479,9 @@ def run():
                     _pump_cooldown[coin] = _now_ts
                 except Exception:
                     _pid = None
+                # 눌림목 대기 등록 (필터 전 — RSI/BB 관계없이 모든 펌핑 추적)
+                if PULLBACK_ENABLED:
+                    queue_pullback(coin, best["price"])
             else:
                 _pid = None
 
@@ -1563,9 +1566,8 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # ── 눌림목 대기 등록 (즉시 매수 대신 -2% 기다림) ────────────────
+            # ── 눌림목 대기 중 신호 기록 후 스킵 ─────────────────────────
             if PULLBACK_ENABLED:
-                queue_pullback(coin, best["price"])
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
