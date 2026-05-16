@@ -104,8 +104,9 @@ _pump_cooldown: dict[str, float] = {}  # coin → last logged timestamp
 PUMP_COOLDOWN_SEC = 300  # 같은 코인 5분 내 재감지 무시
 
 # ── 눌림목 대기 큐 ─────────────────────────────────────────────────────────────
-_pullback_queue: queue.Queue = queue.Queue()  # 대기 코인 등록
-_entry_ready:    queue.Queue = queue.Queue()  # 눌림목 달성 → 메인루프 진입 신호
+_pullback_queue:    queue.Queue    = queue.Queue()  # 대기 코인 등록
+_entry_ready:       queue.Queue    = queue.Queue()  # 눌림목 달성 → 메인루프 진입 신호
+_pullback_cooldown_reg: dict[str, float] = {}       # 중복 등록 방지
 
 
 def start_outcome_tracker(tracker: "PriceTracker") -> None:
@@ -234,8 +235,13 @@ def start_pump_tracker(tracker: "PriceTracker") -> None:
 
 
 def queue_pullback(coin: str, peak_price: float) -> None:
-    """펌핑 감지 후 눌림목 대기 큐에 등록."""
-    _pullback_queue.put({"coin": coin, "peak": peak_price, "t0": time.time()})
+    """펌핑 감지 후 눌림목 대기 큐에 등록. 5분 내 중복 등록 차단."""
+    now = time.time()
+    if now - _pullback_cooldown_reg.get(coin, 0) < PUMP_COOLDOWN_SEC:
+        log.debug(f"[눌림목대기] {coin} 중복 등록 차단 (5분 내)")
+        return
+    _pullback_cooldown_reg[coin] = now
+    _pullback_queue.put({"coin": coin, "peak": peak_price, "t0": now})
     log.info(f"[눌림목대기] {coin} 등록 | 고점={peak_price:,.3f}원 | -2% 기다리는 중...")
 
 
@@ -277,7 +283,7 @@ def start_pullback_tracker(tracker: "PriceTracker") -> None:
                         f"[눌림목 달성] {coin} | 고점={item['peak']:,.3f}원 → "
                         f"현재={current:,.3f}원 ({drop*100:.1f}%) → 진입 신호 전송"
                     )
-                    _entry_ready.put({"coin": coin, "price": current})
+                    _entry_ready.put({"coin": coin, "price": current, "ts": time.time()})
                     continue  # 대기 목록에서 제거 (진입 큐로 넘김)
 
                 still.append(item)
@@ -1272,7 +1278,14 @@ def run():
                 pb_signal = _entry_ready.get_nowait()
                 pb_coin   = pb_signal["coin"]
                 pb_price  = pb_signal["price"]
-                if (pb_coin not in SKIP_COINS and pb_coin not in loss_coins
+                # 낡은 신호 버림 (30초 이상 경과)
+                if time.time() - pb_signal.get("ts", 0) > 30:
+                    log.info(f"[눌림목] {pb_coin} 신호 만료(30초) - 버림")
+                    pb_signal = None
+                # loss_coins 만료 여부 직접 확인
+                _lc = loss_coins.get(pb_coin, {})
+                _lc_active = isinstance(_lc, dict) and time.time() < _lc.get("until", 0)
+                if (pb_signal and pb_coin not in SKIP_COINS and not _lc_active
                         and daily_trades < MAX_DAILY_TRADES):
                     log.warning(
                         f"*** [눌림목 진입] {pb_coin} | "
