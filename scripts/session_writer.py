@@ -5,8 +5,10 @@ watchdog.py가 날짜 변경 시 또는 시작 시 자동 호출.
 """
 import sys
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
+
+KST = timezone(timedelta(hours=9))
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -17,7 +19,8 @@ SESS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def run(target_date: str | None = None) -> None:
-    today = target_date or date.today().isoformat()
+    now_kst = datetime.now(KST)
+    today = target_date or now_kst.date().isoformat()
 
     if not DB_PATH.exists():
         return
@@ -68,7 +71,7 @@ def run(target_date: str | None = None) -> None:
 
     # ── 마크다운 생성 ─────────────────────────────────────────────────
     lines = [f"# {today} 세션 기록\n"]
-    lines.append(f"*자동 생성: {datetime.now().strftime('%H:%M')} KST*\n")
+    lines.append(f"*자동 생성: {now_kst.strftime('%Y-%m-%d %H:%M')} KST*\n")
 
     # 거래 요약
     lines.append("## 거래 요약")

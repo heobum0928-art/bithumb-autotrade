@@ -11,7 +11,9 @@ import logging
 import requests
 import yaml
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
+
+KST = timezone(timedelta(hours=9))
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -76,7 +78,7 @@ def main() -> None:
 
     # 시작 시 오늘 세션 로그 생성
     write_session()
-    last_date = date.today()
+    last_date = datetime.now(KST).date()
 
     procs: dict[str, subprocess.Popen] = {}
     for name, script in BOTS.items():
@@ -87,7 +89,7 @@ def main() -> None:
         time.sleep(CHECK_INTERVAL)
 
         # 날짜 바뀌면 전날 마무리 + 오늘 파일 생성
-        today = date.today()
+        today = datetime.now(KST).date()
         if today != last_date:
             write_session(last_date.isoformat())  # 전날 최종 기록
             write_session()                        # 오늘 새 파일
