@@ -72,6 +72,31 @@ def write_session(target_date: str | None = None) -> None:
         log.warning(f"[session_writer] 실패: {e}")
 
 
+def run_ai_analyze() -> None:
+    out = ROOT / "docs" / f"ai_analysis_{date.today().isoformat()}.md"
+    if out.exists():
+        log.info("[ai_analyze] 오늘 분석 이미 존재, 스킵")
+        return
+    try:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "ai_analyze.py")],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", timeout=120,
+        )
+        if result.returncode == 0 and out.exists():
+            summary = result.stdout[-600:].strip()
+            send_tg(f"📊 AI 분석 완료\n\n{summary}")
+            log.info("[ai_analyze] 완료")
+        else:
+            send_tg(f"❌ AI 분석 실패\n{result.stderr[-300:]}")
+            log.warning(f"[ai_analyze] 실패: {result.stderr[-200:]}")
+    except subprocess.TimeoutExpired:
+        send_tg("❌ AI 분석 타임아웃 (120s)")
+        log.warning("[ai_analyze] 타임아웃")
+    except Exception as e:
+        log.warning(f"[ai_analyze] 예외: {e}")
+
+
 def main() -> None:
     log.info("=== 워치독 시작 ===")
     send_tg("🐕 워치독 시작 — 봇 자동 재시작 감시 중")
@@ -79,6 +104,8 @@ def main() -> None:
     # 시작 시 오늘 세션 로그 생성
     write_session()
     last_date = datetime.now(KST).date()
+
+    last_analysis_date: date | None = None
 
     procs: dict[str, subprocess.Popen] = {}
     for name, script in BOTS.items():
@@ -95,6 +122,13 @@ def main() -> None:
             write_session()                        # 오늘 새 파일
             last_date = today
             log.info(f"[session] 날짜 변경 → {today} 세션 생성")
+
+        # 매일 00:00 KST AI 분석 자동 실행
+        now_kst = datetime.now(KST)
+        if (last_analysis_date != today
+                and now_kst.hour == 0 and now_kst.minute < 1):
+            run_ai_analyze()
+            last_analysis_date = today
 
         for name, script in BOTS.items():
             proc = procs[name]
