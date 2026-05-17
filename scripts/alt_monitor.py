@@ -9,6 +9,7 @@ Run: python scripts/alt_monitor.py
 """
 import sys
 import os
+import socket
 import atexit
 import time
 import json
@@ -18,6 +19,19 @@ import queue
 import yaml
 from collections import deque
 from datetime import datetime, date, timedelta
+
+# ── 중복 실행 방지 (소켓 바인딩) ──────────────────────────────────────────
+def _ensure_single_instance(port: int = 47890) -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    try:
+        sock.bind(("127.0.0.1", port))
+        _ensure_single_instance._sock = sock  # GC 방지
+    except OSError:
+        print(f"[ERROR] alt_monitor 이미 실행 중 (port {port}). 종료합니다.")
+        sys.exit(1)
+
+_ensure_single_instance()
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1356,6 +1370,9 @@ def run():
                 log.info(f"[스캔] {len(tracker.coins())}개 코인 추적 중...")
 
             # ── 신규 상장 감지 ────────────────────────────────────────────────
+            if pos is not None:
+                time.sleep(SCAN_SEC)
+                continue
             if time.time() - last_newlist_ts >= NEW_LIST_SCAN_SEC:
                 last_newlist_ts = time.time()
                 try:

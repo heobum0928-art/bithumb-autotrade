@@ -5,11 +5,14 @@ Restarts either process if it dies. Sends Telegram alert on restart.
 Run: python scripts/watchdog.py
 """
 import sys
+import os
+import atexit
 import time
 import subprocess
 import logging
 import requests
 import yaml
+import psutil
 from pathlib import Path
 from datetime import datetime, date, timezone, timedelta
 
@@ -52,7 +55,25 @@ def send_tg(text: str) -> None:
         pass
 
 
+def kill_existing(name: str) -> None:
+    keyword = f"{name}.py"
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmd = " ".join(p.info["cmdline"] or [])
+            if keyword in cmd and p.pid != os.getpid():
+                log.warning(f"[{name}] 기존 PID {p.pid} 종료")
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except psutil.TimeoutExpired:
+                    p.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+
 def start_bot(name: str, script: Path) -> subprocess.Popen:
+    kill_existing(name)
+    time.sleep(1)
     log.info(f"[{name}] 시작")
     proc = subprocess.Popen(
         [sys.executable, str(script)],
@@ -97,7 +118,22 @@ def run_ai_analyze() -> None:
         log.warning(f"[ai_analyze] 예외: {e}")
 
 
+LOCKFILE = ROOT / "data" / "watchdog.pid"
+
+
 def main() -> None:
+    # 워치독 중복 실행 방지
+    if LOCKFILE.exists():
+        try:
+            old_pid = int(LOCKFILE.read_text())
+            if psutil.pid_exists(old_pid):
+                log.error(f"워치독 이미 실행 중 (PID={old_pid}). 종료합니다.")
+                sys.exit(1)
+        except (ValueError, OSError):
+            pass
+    LOCKFILE.write_text(str(os.getpid()))
+    atexit.register(lambda: LOCKFILE.unlink(missing_ok=True))
+
     log.info("=== 워치독 시작 ===")
     send_tg("🐕 워치독 시작 — 봇 자동 재시작 감시 중")
 
