@@ -1270,6 +1270,17 @@ def run():
 
             # ── 포지션 없음: 눌림목 진입 신호 확인 ─────────────────────────
             if time.time() < cooldown_end:
+                # 쿨다운 중 만료된 신호 제거 (30초 초과 신호는 버림, 유효한 건 다시 넣기)
+                _valid: list[dict] = []
+                while True:
+                    try:
+                        _stale = _entry_ready.get_nowait()
+                        if time.time() - _stale.get("ts", 0) <= 30:
+                            _valid.append(_stale)
+                    except queue.Empty:
+                        break
+                for _v in _valid:
+                    _entry_ready.put(_v)
                 time.sleep(SCAN_SEC)
                 continue
 
@@ -1310,15 +1321,20 @@ def run():
                                            0.0, 0.0, strict_mode)
                             except Exception:
                                 pass
-                            # 같은 코인 중복 신호 큐에서 제거
+                            # 같은 코인 중복 신호 큐에서 제거 (다른 코인은 다시 넣기)
                             _drained = 0
+                            _kept: list[dict] = []
                             while True:
                                 try:
                                     _dup = _entry_ready.get_nowait()
                                     if _dup.get("coin") == pb_coin:
                                         _drained += 1
+                                    else:
+                                        _kept.append(_dup)
                                 except queue.Empty:
                                     break
+                            for _k in _kept:
+                                _entry_ready.put(_k)
                             if _drained:
                                 log.info(f"[눌림목] {pb_coin} 중복 신호 {_drained}개 제거")
                             time.sleep(SCAN_SEC)
