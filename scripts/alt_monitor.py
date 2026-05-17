@@ -9,7 +9,6 @@ Run: python scripts/alt_monitor.py
 """
 import sys
 import os
-import socket
 import atexit
 import time
 import json
@@ -19,20 +18,24 @@ import queue
 import yaml
 from collections import deque
 from datetime import datetime, date, timedelta
+from pathlib import Path
 
-# ── 중복 실행 방지 (소켓 바인딩) ──────────────────────────────────────────
-def _ensure_single_instance(port: int = 47890) -> None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
-    try:
-        sock.bind(("127.0.0.1", port))
-        _ensure_single_instance._sock = sock  # GC 방지
-    except OSError:
-        print(f"[ERROR] alt_monitor 이미 실행 중 (port {port}). 종료합니다.")
-        sys.exit(1)
+# ── 중복 실행 방지 (PID 락파일) ───────────────────────────────────────────
+def _ensure_single_instance() -> None:
+    import psutil
+    lockfile = Path(__file__).parent.parent / "data" / "alt_monitor.pid"
+    if lockfile.exists():
+        try:
+            old_pid = int(lockfile.read_text())
+            if psutil.pid_exists(old_pid):
+                print(f"[ERROR] alt_monitor 이미 실행 중 (PID={old_pid}). 종료합니다.")
+                sys.exit(1)
+        except (ValueError, OSError):
+            pass
+    lockfile.write_text(str(os.getpid()))
+    atexit.register(lambda: lockfile.unlink(missing_ok=True))
 
 _ensure_single_instance()
-from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -77,11 +80,12 @@ VOLUME_POWER_MIN     = 100.0
 
 # 눌림목(풀백) 전략 파라미터
 PULLBACK_ENABLED     = True   # 즉시 매수 대신 눌림목 대기
-PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입
+NEWLISTING_ENABLED   = False  # 신규 상장 즉시 진입 비활성화 (눌림목 전략으로 전환)
+PULLBACK_TARGET_PCT  = -0.07  # 고점 대비 -7% 눌림 시 진입 (깊은 눌림만, +EV 구간)
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
 PULLBACK_ENTRY_KRW   = 30_000 # 소액 테스트 진입금액
-PULLBACK_HOLD_MIN    = 180    # 눌림목 전용 최소 보유 3분 (반등은 빠름)
-PULLBACK_TP_HALF     = 0.025  # 눌림목 전용 1차 익절 +2.5%
+PULLBACK_HOLD_MIN    = 90     # 눌림목 전용 최소 보유 90초 (반등은 빠름)
+PULLBACK_TP_HALF     = 0.04   # 눌림목 전용 1차 익절 +4% (슬리피지+수수료 핸디캡 상회)
 
 # 선진입(거래량 선행) 파라미터
 PRE_ENABLED          = False  # 데이터 기반 비활성화 (14% 승률, 손실 지속)
@@ -258,7 +262,8 @@ def queue_pullback(coin: str, peak_price: float) -> None:
         return
     _pullback_cooldown_reg[coin] = now
     _pullback_queue.put({"coin": coin, "peak": peak_price, "t0": now})
-    log.info(f"[눌림목대기] {coin} 등록 | 고점={peak_price:,.3f}원 | -2% 기다리는 중...")
+    log.info(f"[눌림목대기] {coin} 등록 | 고점={peak_price:,.3f}원 | -7% 기다리는 중...")
+    notify.send(f"👀 [눌림목대기] {coin}\n고점={peak_price:,.3f}원 → -7% 눌림 기다리는 중")
 
 
 def start_pullback_tracker(tracker: "PriceTracker") -> None:
@@ -298,6 +303,11 @@ def start_pullback_tracker(tracker: "PriceTracker") -> None:
                     log.warning(
                         f"[눌림목 달성] {coin} | 고점={item['peak']:,.3f}원 → "
                         f"현재={current:,.3f}원 ({drop*100:.1f}%) → 진입 신호 전송"
+                    )
+                    notify.send(
+                        f"🎯 [눌림목 달성] {coin}\n"
+                        f"고점={item['peak']:,.3f}원 → 현재={current:,.3f}원 ({drop*100:.1f}%)\n"
+                        f"→ 진입 시도 중..."
                     )
                     _entry_ready.put({"coin": coin, "price": current, "ts": time.time()})
                     continue  # 대기 목록에서 제거 (진입 큐로 넘김)
@@ -822,6 +832,55 @@ def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
         return None
 
 
+def do_buy_limit(client: BithumbClient, coin: str, buy_krw: float,
+                 max_price: float) -> dict | None:
+    """지정가 매수. 최우선 매도호가가 max_price 이하일 때만 그 호가로 진입.
+    호가가 상한을 넘으면(가격이 이미 반등) 진입 포기 → 슬리피지 차단."""
+    market = f"KRW-{coin}"
+    try:
+        ob   = client.get_orderbook(coin)
+        asks = ob.get("asks", [])
+        if not asks:
+            log.warning(f"[{coin}] 매도호가 없음 - 진입 포기")
+            return None
+        best_ask = min(float(a["price"]) for a in asks)
+        if best_ask > max_price:
+            log.info(
+                f"[{coin}] 매도호가 {best_ask:,.3f}원 > 상한 {max_price:,.3f}원 "
+                f"- 슬리피지 과다, 진입 포기"
+            )
+            return None
+        volume = buy_krw / best_ask
+        log.info(f"[{coin}] 지정가 매수 {best_ask:,.3f}원 x {volume:.8f}")
+        r    = client.limit_buy(market, best_ask, volume)
+        uuid = r.get("uuid")
+        if not uuid:
+            log.error(f"[{coin}] UUID 없음")
+            return None
+        order = wait_for_order(client, uuid, timeout=10)
+        if order.get("state") != "done":
+            log.warning(f"[{coin}] 지정가 매수 미체결 - 취소")
+            try:
+                client.cancel_order(uuid)
+            except Exception:
+                pass
+            return None
+        vol   = float(order.get("executed_volume", 0))
+        funds = float(order.get("executed_funds",  0))
+        fee   = float(order.get("paid_fee",        0))
+        if vol <= 0:
+            return None
+        entry = funds / vol
+        log.info(f"[{coin}] 매수 체결 | 수량={vol:.8f} 단가={entry:,.3f}원")
+        notify.notify_buy(coin, entry, vol, funds + fee)
+        return {"coin": coin, "market": market, "volume": vol,
+                "entry_price": entry, "cost": funds + fee,
+                "entered_at": datetime.now()}
+    except Exception as e:
+        log.error(f"[{coin}] 지정가 매수 실패: {e}")
+        return None
+
+
 def get_coin_balance(client: BithumbClient, coin: str) -> float:
     try:
         for a in client.get_accounts():
@@ -1321,15 +1380,22 @@ def run():
                 _lc_active = isinstance(_lc, dict) and time.time() < _lc.get("until", 0)
                 if (pb_signal and pb_coin not in SKIP_COINS and not _lc_active
                         and daily_trades < MAX_DAILY_TRADES):
+                    max_price = pb_price * 1.005  # 슬리피지 상한 0.5%
                     log.warning(
                         f"*** [눌림목 진입] {pb_coin} | "
-                        f"눌림가={pb_price:,.3f}원 | {PULLBACK_ENTRY_KRW:,}원 ***"
+                        f"눌림가={pb_price:,.3f}원 | 상한={max_price:,.3f}원 | "
+                        f"{PULLBACK_ENTRY_KRW:,}원 ***"
                     )
                     avail   = get_available_krw(client)
                     buy_krw = min(PULLBACK_ENTRY_KRW, avail * 0.99)
                     if buy_krw >= MIN_KRW:
-                        new_pos = do_buy(client, pb_coin, buy_krw)
+                        new_pos = do_buy_limit(client, pb_coin, buy_krw, max_price)
                         if new_pos:
+                            notify.send(
+                                f"🚀 [눌림목 진입] {pb_coin}\n"
+                                f"체결가={new_pos['entry_price']:,.3f}원 | "
+                                f"진입금={PULLBACK_ENTRY_KRW:,}원"
+                            )
                             new_pos["entry_type"] = "pullback"
                             pos      = new_pos
                             highest  = float(pos["entry_price"])
@@ -1373,7 +1439,7 @@ def run():
             if pos is not None:
                 time.sleep(SCAN_SEC)
                 continue
-            if time.time() - last_newlist_ts >= NEW_LIST_SCAN_SEC:
+            if NEWLISTING_ENABLED and time.time() - last_newlist_ts >= NEW_LIST_SCAN_SEC:
                 last_newlist_ts = time.time()
                 try:
                     cur_coins = set(client.get_all_coins_v2())

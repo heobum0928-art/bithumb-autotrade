@@ -130,6 +130,18 @@ class BithumbClient:
         }
         return self._post_v2("/v1/orders", body)
 
+    def limit_buy(self, market: str, price: float, volume: float) -> dict:
+        """Limit buy at a fixed price. market format: 'KRW-BTC'.
+        price must be a valid tick (e.g. an actual order-book ask price)."""
+        body = {
+            "market": market.upper(),
+            "side": "bid",
+            "ord_type": "limit",
+            "price": str(price),
+            "volume": f"{volume:.8f}",
+        }
+        return self._post_v2("/v1/orders", body)
+
     def market_sell(self, market: str, volume: float) -> dict:
         """Market sell. market format: 'KRW-BTC'."""
         body = {
