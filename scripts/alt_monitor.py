@@ -42,7 +42,7 @@ WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 1.0
 SCAN_SEC             = 1
 WINDOW_SEC           = 60
-PRICE_THRESH         = 0.03
+PRICE_THRESH         = 0.05
 VOLUME_MULT          = 5.0   # 7→5, RSI/MACD 복합 조건으로 보완
 ALT_ENTRY_RATIO      = 0.05  # 0.10→0.05, 손실 최소화 (50,000원)
 TP_HALF              = 0.015  # 빠른 익절 +1.5% (손실 방어 우선)
@@ -66,6 +66,8 @@ PULLBACK_ENABLED     = True   # 즉시 매수 대신 눌림목 대기
 PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
 PULLBACK_ENTRY_KRW   = 30_000 # 소액 테스트 진입금액
+PULLBACK_HOLD_MIN    = 180    # 눌림목 전용 최소 보유 3분 (반등은 빠름)
+PULLBACK_TP_HALF     = 0.025  # 눌림목 전용 1차 익절 +2.5%
 
 # 선진입(거래량 선행) 파라미터
 PRE_ENABLED          = False  # 데이터 기반 비활성화 (14% 승률, 손실 지속)
@@ -1068,8 +1070,15 @@ def run():
                     save_active(pos, highest, phase, sold_vol, recv_krw, trail)
 
                     entry_type   = pos.get("entry_type", "regular")
-                    hold_min_sec = NEW_LIST_HOLD_MIN if entry_type == "newlisting" else HOLD_MIN_SEC
-                    tp_half_pct  = NEW_LIST_TP_PCT   if entry_type == "newlisting" else TP_HALF
+                    if entry_type == "newlisting":
+                        hold_min_sec = NEW_LIST_HOLD_MIN
+                        tp_half_pct  = NEW_LIST_TP_PCT
+                    elif entry_type == "pullback":
+                        hold_min_sec = PULLBACK_HOLD_MIN
+                        tp_half_pct  = PULLBACK_TP_HALF
+                    else:
+                        hold_min_sec = HOLD_MIN_SEC
+                        tp_half_pct  = TP_HALF
 
                     # ── 초기 보유 구간 ────────────────────────────────────────
                     if hold_elapsed < hold_min_sec:
