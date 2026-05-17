@@ -1310,6 +1310,17 @@ def run():
                                            0.0, 0.0, strict_mode)
                             except Exception:
                                 pass
+                            # 같은 코인 중복 신호 큐에서 제거
+                            _drained = 0
+                            while True:
+                                try:
+                                    _dup = _entry_ready.get_nowait()
+                                    if _dup.get("coin") == pb_coin:
+                                        _drained += 1
+                                except queue.Empty:
+                                    break
+                            if _drained:
+                                log.info(f"[눌림목] {pb_coin} 중복 신호 {_drained}개 제거")
                             time.sleep(SCAN_SEC)
                             continue
             except queue.Empty:
