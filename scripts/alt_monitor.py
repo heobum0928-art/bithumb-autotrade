@@ -63,7 +63,7 @@ VOLUME_POWER_MIN     = 100.0
 
 # 눌림목(풀백) 전략 파라미터
 PULLBACK_ENABLED     = True   # 즉시 매수 대신 눌림목 대기
-PULLBACK_TARGET_PCT  = -0.02  # 고점 대비 -2% 눌림 시 진입
+PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
 PULLBACK_ENTRY_KRW   = 30_000 # 소액 테스트 진입금액
 
