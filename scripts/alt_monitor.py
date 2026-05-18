@@ -17,8 +17,19 @@ import threading
 import queue
 import yaml
 from collections import deque
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
+
+# ── 거래소 시각 파싱 헬퍼 ───────────────────────────────────────────────────
+KST = timezone(timedelta(hours=9))
+
+def _parse_exchange_ts(date_s: str, time_s: str) -> float | None:
+    """빗썸 WS content date(YYYYMMDD)+time(HHMMSS, KST) → epoch sec. 실패 시 None."""
+    try:
+        dt = datetime.strptime(date_s + time_s, "%Y%m%d%H%M%S")
+        return dt.replace(tzinfo=KST).timestamp()
+    except (ValueError, TypeError):
+        return None
 
 # ── 중복 실행 방지 (PID 락파일) ───────────────────────────────────────────
 def _ensure_single_instance() -> None:
@@ -432,6 +443,7 @@ class PriceTracker:
     def __init__(self):
         self._hist: dict[str, deque] = {}
         self._vol_power: dict[str, float] = {}
+        self._ex_ts: dict[str, float] = {}   # 코인별 최근 거래소 발생 시각 (epoch sec)
         self._lock = threading.Lock()
         self._ws = None
         self._ws_running = False
@@ -461,6 +473,7 @@ class PriceTracker:
                 if price <= 0:
                     return
                 now = time.time()
+                ex_ts = _parse_exchange_ts(c.get("date", ""), c.get("time", ""))
                 with self._lock:
                     if coin not in self._hist:
                         self._hist[coin] = deque(maxlen=self.MAXLEN)
@@ -468,6 +481,8 @@ class PriceTracker:
                     if not hist or now - hist[-1][0] >= WS_MIN_INTERVAL:
                         hist.append((now, price, acc_val))
                     self._vol_power[coin] = vp
+                    if ex_ts is not None:
+                        self._ex_ts[coin] = ex_ts
             except Exception as e:
                 log.debug(f"[WS] 파싱 오류: {e}")
 
@@ -506,6 +521,23 @@ class PriceTracker:
     def get_vol_power(self, coin: str) -> float:
         with self._lock:
             return self._vol_power.get(coin, 100.0)
+
+    def get_latest_exchange_ts(self, coin: str) -> float | None:
+        """코인별 최근 거래소 발생 시각(epoch sec). 파싱 실패/미수신이면 None."""
+        with self._lock:
+            return self._ex_ts.get(coin)
+
+    def get_latest_acc_value(self, coin: str) -> float | None:
+        """코인별 최근 누적 거래대금(WS value). deque 튜플 인덱스 2 재사용 (D-08).
+
+        deque 튜플은 (recv_ts, price, acc_val) 3원소 — acc_val 이 누적 거래대금.
+        미수신 코인이면 None. 별도 dict 없이 hist[-1][2] 를 직접 노출한다.
+        """
+        with self._lock:
+            hist = self._hist.get(coin)
+            if not hist:
+                return None
+            return hist[-1][2]
 
     def get_signal(self, coin: str) -> dict | None:
         with self._lock:
