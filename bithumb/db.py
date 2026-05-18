@@ -203,6 +203,43 @@ def update_pump_path(pump_id: int, **kwargs) -> None:
         con.execute(f"UPDATE pump_log SET {cols} WHERE id = ?", vals)
 
 
+def log_tick(pump_id: int, seq: int, recv_ts: float, price: float,
+             exchange_ts: float | None = None, acc_value: float | None = None,
+             volume_power: float | None = None, gap_before: bool = False,
+             ts_estimated: bool = False) -> None:
+    """펌핑 이벤트 1틱을 pump_ticks 에 기록. pump_id 는 pump_log.id 참조.
+
+    exchange_ts 가 None 이면 recv_ts 를 복사하고 ts_estimated 를 True 로 강제한다.
+    [Phase 2 의존 계약] 이 시그니처는 백테스트 엔진이 import 한다 — 변경 금지.
+    위치 인자 4개(pump_id, seq, recv_ts, price) 고정, 나머지는 키워드 인자.
+    """
+    if exchange_ts is None:
+        exchange_ts = recv_ts
+        ts_estimated = True
+    with _conn() as con:
+        con.execute(
+            """INSERT INTO pump_ticks
+               (pump_id, seq, exchange_ts, recv_ts, price, acc_value,
+                volume_power, gap_before, ts_estimated)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (pump_id, seq, exchange_ts, recv_ts, price, acc_value,
+             volume_power, int(gap_before), int(ts_estimated)),
+        )
+
+
+def get_ticks(pump_id: int) -> list[dict]:
+    """특정 펌핑 이벤트의 모든 틱을 seq 순으로 반환 (Phase 2 백테스트용).
+
+    [Phase 2 의존 계약] get_ticks(pump_id) -> list[dict]. 변경 금지.
+    존재하지 않는 pump_id 는 빈 리스트를 반환한다.
+    """
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM pump_ticks WHERE pump_id = ? ORDER BY seq", (pump_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def update_signal_outcome(signal_id: int, outcome_5m: float = None, outcome_30m: float = None) -> None:
     updates, vals = [], []
     if outcome_5m is not None:
