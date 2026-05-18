@@ -75,6 +75,19 @@ CREATE TABLE IF NOT EXISTS pump_log (
     bounce_after  INTEGER DEFAULT 0,
     entered       INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS pump_ticks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    pump_id       INTEGER NOT NULL,        -- pump_log.id 참조 (논리적 FK)
+    seq           INTEGER NOT NULL,        -- 이벤트 내 절대 순번 (0,1,2,...)
+    exchange_ts   REAL,                    -- 거래소 발생 시각 (epoch sec)
+    recv_ts       REAL    NOT NULL,        -- 수집기 수신 시각 (time.time())
+    price         REAL    NOT NULL,        -- closePrice
+    acc_value     REAL,                    -- 누적 거래대금 (value)
+    volume_power  REAL,                    -- 체결강도 (volumePower)
+    gap_before    INTEGER DEFAULT 0,       -- 직전 틱과 갭이면 1 (REC-04)
+    ts_estimated  INTEGER DEFAULT 0        -- exchange_ts가 recv_ts 복사값이면 1 (REC-03)
+);
+CREATE INDEX IF NOT EXISTS idx_pump_ticks_pump_id ON pump_ticks(pump_id);
 """
 
 
