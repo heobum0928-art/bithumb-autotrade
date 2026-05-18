@@ -67,6 +67,16 @@ log = logging.getLogger(__name__)
 
 # ── 전략 파라미터 ──────────────────────────────────────────────────────────────
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
+
+# config.yaml trading.record_only — 기본 True(안전). 실거래 재개는 별도 마일스톤.
+def _load_record_only() -> bool:
+    try:
+        _cfg = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+        return bool(_cfg.get("trading", {}).get("record_only", True))
+    except Exception:
+        return True
+
+RECORD_ONLY          = _load_record_only()
 WS_MIN_INTERVAL      = 1.0
 SCAN_SEC             = 1
 WINDOW_SEC           = 60
@@ -832,6 +842,9 @@ def wait_for_order(client: BithumbClient, uuid: str, timeout: int = 20) -> dict:
 
 
 def do_buy(client: BithumbClient, coin: str, buy_krw: float) -> dict | None:
+    if RECORD_ONLY:
+        log.warning(f"[{coin}] RECORD_ONLY 차단됨 — 시장가 매수 {buy_krw:,.0f}원 미실행")
+        return None
     market = f"KRW-{coin}"
     log.info(f"[{coin}] 시장가 매수 {buy_krw:,.0f}원")
     try:
@@ -868,6 +881,9 @@ def do_buy_limit(client: BithumbClient, coin: str, buy_krw: float,
                  max_price: float) -> dict | None:
     """지정가 매수. 최우선 매도호가가 max_price 이하일 때만 그 호가로 진입.
     호가가 상한을 넘으면(가격이 이미 반등) 진입 포기 → 슬리피지 차단."""
+    if RECORD_ONLY:
+        log.warning(f"[{coin}] RECORD_ONLY 차단됨 — 지정가 매수 {buy_krw:,.0f}원 미실행")
+        return None
     market = f"KRW-{coin}"
     try:
         ob   = client.get_orderbook(coin)
@@ -930,6 +946,10 @@ def do_sell(client: BithumbClient, pos: dict, volume: float,
     잔고가 이미 0이면 None 반환 (수동 매도 등 외부 청산).
     미체결 시 무한 재시도.
     """
+    if RECORD_ONLY:
+        coin = pos.get("coin", "?")
+        log.warning(f"[{coin}] RECORD_ONLY 차단됨 — 시장가 매도 {volume:.6f} 미실행")
+        return None
     coin = pos["coin"]
     actual_bal = get_coin_balance(client, coin)
     if actual_bal <= 0:
