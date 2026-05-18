@@ -26,7 +26,7 @@
   3. 각 틱 행에 거래소 발생 시각(exchange_ts)과 수집기 수신 시각(recv_ts)이 분리 저장되어 있다
   4. WebSocket이 단절됐다 복구된 구간에 틱 갭이 DB에 명시적으로 기록되어 백테스트가 오염 구간을 식별할 수 있다
 **Plans**: 3 plans
-- [ ] 01-01-PLAN.md — pump_ticks 테이블 스키마 + log_tick/get_ticks 함수
+- [x] 01-01-PLAN.md — pump_ticks 테이블 스키마 + log_tick/get_ticks 함수
 - [ ] 01-02-PLAN.md — RECORD_ONLY 게이트 + WS 거래소 시각 파싱
 - [ ] 01-03-PLAN.md — start_pump_tracker 틱 INSERT 배선 + 갭 감지 + 10분 추적
 
