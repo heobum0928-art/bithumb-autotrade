@@ -56,30 +56,28 @@
 
 ## Traceability
 
-로드맵 작성 시 채워짐.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REC-01 | TBD | Pending |
-| REC-02 | TBD | Pending |
-| REC-03 | TBD | Pending |
-| REC-04 | TBD | Pending |
-| BT-01 | TBD | Pending |
-| BT-02 | TBD | Pending |
-| BT-03 | TBD | Pending |
-| BT-04 | TBD | Pending |
-| BT-05 | TBD | Pending |
-| VAL-01 | TBD | Pending |
-| VAL-02 | TBD | Pending |
-| VAL-03 | TBD | Pending |
-| VAL-04 | TBD | Pending |
-| VAL-05 | TBD | Pending |
+| REC-01 | Phase 1 | Pending |
+| REC-02 | Phase 1 | Pending |
+| REC-03 | Phase 1 | Pending |
+| REC-04 | Phase 1 | Pending |
+| BT-01 | Phase 2 | Pending |
+| BT-02 | Phase 2 | Pending |
+| BT-03 | Phase 2 | Pending |
+| BT-04 | Phase 2 | Pending |
+| BT-05 | Phase 2 | Pending |
+| VAL-01 | Phase 3 | Pending |
+| VAL-02 | Phase 3 | Pending |
+| VAL-03 | Phase 3 | Pending |
+| VAL-04 | Phase 3 | Pending |
+| VAL-05 | Phase 3 | Pending |
 
 **Coverage:**
 - v1 requirements: 14 total
-- Mapped to phases: 0 (로드맵 작성 시 채워짐)
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14 (Phase 1: 4, Phase 2: 5, Phase 3: 5)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-19*
-*Last updated: 2026-05-19 after initial definition*
+*Last updated: 2026-05-19 after roadmap creation (traceability filled)*
