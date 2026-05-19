@@ -1,12 +1,14 @@
 """빗썸 펌핑 눌림목 전략 백테스트 — 틱 재생 기반 오프라인 시뮬레이션 (읽기 전용)."""
 
 import argparse
+import csv
 import sqlite3
+import statistics
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from bithumb.db import DB_PATH
+from bithumb.db import DB_PATH, get_ticks
 
 # ── 전략 상수 (D-08: Phase 2는 고정 1조합. Phase 3가 그리드 서치로 파라미터화) ──
 ENTRY_DROP_PCT   = 0.07    # D-02: 주행 고점 대비 -7% 눌림에서 진입
@@ -19,6 +21,10 @@ GAP_EXCLUDE_PCT  = 0.30    # D-15: 갭 비율이 30% 초과면 이벤트 통째 
 # ── 비용 모델 (BT-04) ──
 ROUND_TRIP_FEE   = 0.005                       # 왕복 수수료 0.5%
 SLIPPAGE_SCENARIOS = (0.0, 0.005, 0.01, 0.02)  # D-11: 항상 4행
+
+# ── 지표 (BT-05) ──
+Z_95 = 1.96                # D-12: 표준정규 양측 95% z값 (정규근사 CI)
+MIN_SAMPLE = 30            # 이 미만의 거래수면 표본 부족 경고 (D-12)
 
 
 def _apply_slip(price: float, slippage: float, side: str) -> float:
@@ -162,6 +168,53 @@ def simulate_event(ticks: list[dict], slippage: float) -> dict | None:
     if state == "IN_POSITION":
         return _close(entry, ticks[-1], slippage, "시간초과")
     return None   # 진입 못 함
+
+
+# ── 지표 계산 (BT-05) ─────────────────────────────────────────────────
+
+def ev_ci(pnls: list[float]) -> tuple[float, float, float]:
+    """거래별 손익률 리스트 -> (EV, CI 하한, CI 상한). 정규근사 (D-12)."""
+    n = len(pnls)
+    ev = statistics.mean(pnls)
+    if n < 2:
+        return ev, ev, ev      # 표본 1건이면 CI 정의 불가
+    se = statistics.stdev(pnls) / (n ** 0.5)   # 표본표준편차(n-1) 사용
+    return ev, ev - Z_95 * se, ev + Z_95 * se
+
+
+def max_drawdown(pnls_ordered: list[float]) -> float:
+    """시간순 정렬된 손익률 리스트 -> MDD (양수). 누적손익 단순합 모델."""
+    equity = peak = mdd = 0.0
+    for r in pnls_ordered:
+        equity += r
+        peak = max(peak, equity)
+        mdd = max(mdd, peak - equity)
+    return mdd
+
+
+def compute_metrics(trades: list[dict]) -> dict:
+    """청산 Trade dict 리스트 -> 승률·EV·95% CI·MDD·표본경고 지표 dict (BT-05).
+
+    MDD는 거래 순서에 의존하므로 entry_ts 기준 정렬 후 누적손익을 쌓는다.
+    """
+    if not trades:
+        return {"count": 0}
+    ordered = sorted(trades, key=lambda t: t["entry_ts"])
+    pnls = [t["pnl_pct"] for t in trades]
+    pnls_ordered = [t["pnl_pct"] for t in ordered]
+    wins = [t for t in trades if t["pnl_pct"] > 0]
+    ev, ci_low, ci_high = ev_ci(pnls)
+    count = len(trades)
+    return {
+        "count":          count,
+        "win_count":      len(wins),
+        "win_rate":       len(wins) / count,
+        "ev":             ev,
+        "ci_low":         ci_low,
+        "ci_high":        ci_high,
+        "mdd":            max_drawdown(pnls_ordered),
+        "sample_warning": count < MIN_SAMPLE,
+    }
 
 
 def _self_test() -> bool:
