@@ -7,5 +7,6 @@ __pycache__/
 venv/
 data/*.db
 data/*.sqlite
+data/backtest_trades.csv
 logs/*.log
 *.token
