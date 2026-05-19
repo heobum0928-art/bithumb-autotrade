@@ -51,7 +51,7 @@ _ensure_single_instance()
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, log_pump, update_pump_path, DB_PATH
+from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, log_pump, update_pump_path, log_tick, DB_PATH
 from bithumb.indicators import snapshot as indicator_snapshot
 from bithumb import notify
 
@@ -270,6 +270,22 @@ def start_pump_tracker(tracker: "PriceTracker") -> None:
                         update_pump_path(pid, **updates)
                     except Exception:
                         pass
+
+                # ── 틱 기록 (REC-02/03/04, D-08) — 추가 API 호출 없음, tracker 버퍼 재사용 ──
+                if p > 0:
+                    now_ts = now            # 루프 상단의 now = time.time()
+                    gap = bool(last_recv) and (now_ts - last_recv) >= GAP_THRESHOLD_SEC
+                    ex_ts = tracker.get_latest_exchange_ts(coin)   # None 가능 → log_tick 폴백
+                    vp    = tracker.get_vol_power(coin)
+                    acc_v = tracker.get_latest_acc_value(coin)     # None 가능 → 컬럼 NULL 허용
+                    try:
+                        log_tick(pid, tick_seq, recv_ts=now_ts, price=p,
+                                 exchange_ts=ex_ts, acc_value=acc_v, volume_power=vp,
+                                 gap_before=gap)
+                    except Exception:
+                        pass
+                    item[13] = tick_seq + 1   # 다음 seq 영속화
+                    item[14] = now_ts         # last_recv_ts 갱신
 
                 # 종료 조건: elapsed 기반 10분 추적 (D-05). 5분 집계는 위에서 그대로 저장됨.
                 if elapsed < PUMP_TRACK_SEC:

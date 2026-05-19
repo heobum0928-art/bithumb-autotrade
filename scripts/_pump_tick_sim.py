@@ -11,9 +11,14 @@ Run: python scripts/_pump_tick_sim.py   (성공 시 "OK" 출력, exit 0)
 """
 import sys
 import time
-import threading
 from datetime import datetime
 from pathlib import Path
+
+# Windows 콘솔(cp949)에서 유니코드 출력이 깨지지 않도록 UTF-8 강제
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
