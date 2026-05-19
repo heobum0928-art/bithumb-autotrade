@@ -268,19 +268,141 @@ def _self_test() -> bool:
     return True
 
 
-if __name__ == "__main__":
+# ── 백테스트 오케스트레이션 (BT-05) ───────────────────────────────────
+
+def _gap_ratio(ticks: list[dict]) -> float:
+    """이벤트 틱 중 갭 틱(gap_before=1) 비율. 빈 리스트면 0.0 (D-15)."""
+    if not ticks:
+        return 0.0
+    return sum(t["gap_before"] for t in ticks) / len(ticks)
+
+
+def _est_ratio(ticks: list[dict]) -> float:
+    """이벤트 틱 중 추정 시각 틱(ts_estimated=1) 비율. 빈 리스트면 0.0 (D-16)."""
+    if not ticks:
+        return 0.0
+    return sum(t["ts_estimated"] for t in ticks) / len(ticks)
+
+
+def run_backtest(db_path) -> dict:
+    """모든 펌핑 이벤트를 슬리피지 4시나리오로 시뮬레이션 (BT-05).
+
+    D-15: 갭 비율이 GAP_EXCLUDE_PCT 초과인 이벤트는 통째 제외.
+    제외 안 된 이벤트만 SLIPPAGE_SCENARIOS 각각으로 simulate_event 호출.
+
+    Return dict: by_slippage(slippage -> list[trade]), total_events,
+                 excluded, avg_est_ratio.
+    """
+    events = load_events(db_path)
+    by_slippage: dict[float, list[dict]] = {s: [] for s in SLIPPAGE_SCENARIOS}
+    excluded = 0
+    est_ratios: list[float] = []
+
+    for event in events:
+        ticks = get_ticks(event["id"])
+        if _gap_ratio(ticks) > GAP_EXCLUDE_PCT:    # D-15: 갭 오염 이벤트 제외
+            excluded += 1
+            continue
+        est_ratios.append(_est_ratio(ticks))
+        for slip in SLIPPAGE_SCENARIOS:
+            trade = simulate_event(ticks, slip)
+            if trade is None:                       # 무진입 이벤트는 거래 없음
+                continue
+            trade["pump_id"] = event["id"]
+            trade["coin"] = event["coin"]
+            by_slippage[slip].append(trade)
+
+    avg_est_ratio = sum(est_ratios) / len(est_ratios) if est_ratios else 0.0
+    return {
+        "by_slippage":   by_slippage,
+        "total_events":  len(events) - excluded,
+        "excluded":      excluded,
+        "avg_est_ratio": avg_est_ratio,
+    }
+
+
+def print_report(result: dict) -> None:
+    """백테스트 결과를 stdout에 슬리피지 4행 비교 테이블로 출력 (D-10/D-11/D-16)."""
+    print("빗썸 펌핑 눌림목 전략 백테스트")
+    print("=" * 68)
+
+    if result["total_events"] == 0 and result["excluded"] == 0:
+        print("백테스트 대상 이벤트 없음 — 틱 데이터 축적 필요")
+        return
+
+    print(f"대상 이벤트: {result['total_events']}건  "
+          f"(제외: {result['excluded']}건 — 갭 오염 임계 초과)")
+    print(f"추정 틱 경고: 평균 ts_estimated 비율 {result['avg_est_ratio'] * 100:.1f}%")
+    print(f"전략 상수: 진입 -{ENTRY_DROP_PCT * 100:.0f}%  "
+          f"TP +{TP_PCT * 100:.0f}%  SL -{SL_PCT * 100:.0f}%  "
+          f"시간초과 {TIMEOUT_SEC}초")
+    print(f"수수료(왕복): {ROUND_TRIP_FEE * 100:.2f}%")
+    print()
+    print(f"{'슬리피지':>8s}  {'거래수':>6s}  {'승률':>6s}  {'EV':>8s}  "
+          f"{'95% CI':>20s}  {'MDD':>6s}")
+    print("-" * 68)
+
+    warned = False
+    for slip in SLIPPAGE_SCENARIOS:
+        trades = result["by_slippage"][slip]
+        m = compute_metrics(trades)
+        if m["count"] == 0:
+            print(f"{slip * 100:>7.1f}%  {'0':>6s}  {'-':>6s}  {'-':>8s}  "
+                  f"{'-':>20s}  {'-':>6s}  (거래 없음)")
+            continue
+        ci = f"[{m['ci_low'] * 100:+.2f}%, {m['ci_high'] * 100:+.2f}%]"
+        warn = "  ⚠표본부족" if m["sample_warning"] else ""
+        if m["sample_warning"]:
+            warned = True
+        print(f"{slip * 100:>7.1f}%  {m['count']:>6d}  "
+              f"{m['win_rate'] * 100:>5.1f}%  {m['ev'] * 100:>+7.2f}%  "
+              f"{ci:>20s}  {m['mdd'] * 100:>5.1f}%{warn}")
+
+    print("-" * 68)
+    if warned:
+        print(f"⚠ 표본 부족 (거래수 < {MIN_SAMPLE}) — EV/CI 결론 신뢰 제한, "
+              f"Phase 3 추가 검증 필요 (D-12)")
+
+
+def write_csv(result: dict, path: str) -> int:
+    """4개 슬리피지 시나리오의 거래 상세를 한 CSV 파일로 출력 (D-10).
+
+    encoding=utf-8-sig — 한글 코인명·헤더 Excel 깨짐 방지.
+    Return: 기록한 거래 행 수.
+    """
+    cols = ["pump_id", "coin", "entry_ts", "entry_price", "exit_ts",
+            "exit_price", "exit_reason", "hold_sec", "pnl_pct", "slippage"]
+    rows = [t for slip in SLIPPAGE_SCENARIOS for t in result["by_slippage"][slip]]
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for t in rows:
+            w.writerow({k: t.get(k) for k in cols})
+    return len(rows)
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="빗썸 펌핑 눌림목 전략 백테스트 (읽기 전용)"
     )
     parser.add_argument("--db", default=str(DB_PATH), help="SQLite DB 경로")
+    parser.add_argument("--csv", default="data/backtest_trades.csv",
+                        help="거래 상세 CSV 출력 경로")
     parser.add_argument(
         "--self-test", action="store_true", help="DataSlice lookahead 차단 자가 검증"
     )
     args = parser.parse_args()
 
     if args.self_test:
-        ok = _self_test()
-        sys.exit(0 if ok else 1)
+        return 0 if _self_test() else 1
 
-    print("백테스트 시뮬레이션 루프는 Plan 02·03에서 구현 예정.")
-    sys.exit(0)
+    result = run_backtest(args.db)
+    print_report(result)
+    n = write_csv(result, args.csv)
+    print(f"상세: {args.csv} ({n}행)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
