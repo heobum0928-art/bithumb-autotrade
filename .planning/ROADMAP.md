@@ -28,7 +28,7 @@
 **Plans**: 3 plans
 - [x] 01-01-PLAN.md — pump_ticks 테이블 스키마 + log_tick/get_ticks 함수
 - [x] 01-02-PLAN.md — RECORD_ONLY 게이트 + WS 거래소 시각 파싱
-- [ ] 01-03-PLAN.md — start_pump_tracker 틱 INSERT 배선 + 갭 감지 + 10분 추적
+- [x] 01-03-PLAN.md — start_pump_tracker 틱 INSERT 배선 + 갭 감지 + 10분 추적
 
 ### Phase 2: Backtest Engine
 **Goal**: 수집된 틱 데이터를 재생해 전략을 실거래 없이 시뮬레이션하고 EV·승률·MDD를 산출하는 독립 스크립트가 존재한다
