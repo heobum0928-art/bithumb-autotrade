@@ -20,7 +20,7 @@
 - [x] **BT-02**: 틱 데이터를 시간순 재생하며 진입 조건 평가·가상 포지션 청산을 시뮬레이션
 - [x] **BT-03**: 진입 판정에 미래 정보(lookahead)를 사용하지 않음 — 진입 시점에 알 수 있는 데이터만 사용
 - [x] **BT-04**: 수수료(왕복 0.5%)와 슬리피지(기본 1%)를 상수 파라미터로 손익 계산에 반영
-- [ ] **BT-05**: 백테스트 결과로 승률·EV·MDD·거래수 지표를 출력
+- [x] **BT-05**: 백테스트 결과로 승률·EV·MDD·거래수 지표를 출력
 
 ### 전략 검증 (Validation)
 
@@ -66,7 +66,7 @@
 | BT-02 | Phase 2 | Complete |
 | BT-03 | Phase 2 | Complete |
 | BT-04 | Phase 2 | Complete |
-| BT-05 | Phase 2 | Pending |
+| BT-05 | Phase 2 | Complete |
 | VAL-01 | Phase 3 | Pending |
 | VAL-02 | Phase 3 | Pending |
 | VAL-03 | Phase 3 | Pending |

@@ -9,7 +9,7 @@
 ## Phases
 
 - [ ] **Phase 1: Tick Recording Infrastructure** - 봇을 기록 전용 모드로 전환 + 초 단위 틱 DB 수집 시작 (실거래 차단 확인 후 2~3주 운영)
-- [ ] **Phase 2: Backtest Engine** - 틱 데이터를 시간순 재생해 전략을 시뮬레이션하는 독립 오프라인 엔진 제작 (Phase 1 운영 기간 중 병행 개발 가능)
+- [x] **Phase 2: Backtest Engine** - 틱 데이터를 시간순 재생해 전략을 시뮬레이션하는 독립 오프라인 엔진 제작 (Phase 1 운영 기간 중 병행 개발 가능) (completed 2026-05-19)
 - [ ] **Phase 3: Strategy Validation** - 충분한 틱 데이터로 out-of-sample 검증 사이클을 돌려 EV 양수/음수 GO/NO-GO 결론 도출
 
 ---
@@ -43,7 +43,7 @@
 **Plans**: 3 plans
 - [x] 02-01-PLAN.md — 스크립트 골격 + 전략 상수 + DataSlice lookahead 차단 + load_events
 - [x] 02-02-PLAN.md — 비용 헬퍼 + simulate_event 틱 재생 진입/청산 시뮬레이션
-- [ ] 02-03-PLAN.md — 지표 계산(EV·MDD·CI) + 슬리피지 4시나리오 리포트 + CSV 출력
+- [x] 02-03-PLAN.md — 지표 계산(EV·MDD·CI) + 슬리피지 4시나리오 리포트 + CSV 출력
 
 ### Phase 3: Strategy Validation
 **Goal**: 충분한 표본의 틱 데이터를 train/test로 분할해 out-of-sample 검증을 완료하고, 현재 전략의 EV가 양수인지 음수인지 데이터로 명확히 판정한다
@@ -64,7 +64,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Tick Recording Infrastructure | 0/3 | Not started | - |
-| 2. Backtest Engine | 0/3 | Not started | - |
+| 2. Backtest Engine | 3/3 | Complete   | 2026-05-19 |
 | 3. Strategy Validation | 0/? | Not started | - |
 
 ---

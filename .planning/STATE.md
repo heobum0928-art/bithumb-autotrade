@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-05-19T04:04:57.669Z"
+last_updated: "2026-05-19T04:10:15.385Z"
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
   percent: 100
 ---
 
@@ -24,19 +24,19 @@ progress:
 
 ## Current Position
 
-Phase: 02 (backtest-engine) — EXECUTING
+Phase: 02 (backtest-engine) — READY FOR VERIFICATION
 Plan: 3 of 3
 | Field | Value |
 |-------|-------|
 | Milestone | 검증 체계 전환 |
-| Current Phase | 1 — Tick Recording Infrastructure |
+| Current Phase | 2 — Backtest Engine |
 | Current Plan | 3 of 3 (all plans complete) |
 | Phase Status | Ready for verification |
-| Overall Progress | 0/3 phases complete (3/3 plans) |
+| Overall Progress | 1/3 phases complete (6/6 plans) |
 
 ```
 Progress: [██████████] 100%
-Phase 1: [~] Phase 2: [ ] Phase 3: [ ]
+Phase 1: [✓] Phase 2: [~] Phase 3: [ ]
 ```
 
 ---
@@ -68,6 +68,8 @@ Phase 1: [~] Phase 2: [ ] Phase 3: [ ]
 | 백테스트 DB 읽기 전용 | load_events는 SELECT만 — INSERT/UPDATE/DELETE/CREATE 미사용, 봇 데이터 무오염 보장 (02-01) | 2026-05-19 |
 | _close() 헬퍼로 Trade dict 생성 분리 | TP/SL/시간초과 3개 청산 경로가 동일 형식·동일 비용 계산을 거치도록 강제 (02-02) | 2026-05-19 |
 | 다음 틱(cursor+1) 체결 강제 | 진입/청산 모두 다음 틱 price 사용 — lookahead bias 차단, 갭 틱 TP/SL 판정 제외 (02-02) | 2026-05-19 |
+| MDD 누적손익 단순합 모델 채택 | 복리 아님 — Python 학습 중 사용자에게 투명한 for-loop 유지 (02-03) | 2026-05-19 |
+| 지표는 stdlib statistics만 사용 | 정규근사 95% CI(Z_95=1.96), pstdev 금지(표본표준편차), scipy 의존 없음 (02-03) | 2026-05-19 |
 
 ### Known Constraints
 
@@ -90,13 +92,15 @@ Phase 1: [~] Phase 2: [ ] Phase 3: [ ]
 ### Todos
 
 - [ ] Phase 1 검증 (`/gsd:verify-phase 1`) — 3개 플랜 모두 완료, 검증 대기
+- [ ] Phase 2 검증 (`/gsd:verify-phase 2`) — 3개 플랜 모두 완료, 검증 대기
+- [ ] 틱 데이터 축적 (2~3주) — pump_ticks 비어 있어 실 백테스트는 "이벤트 없음", 엔진 자체는 합성 데이터 검증 완료
 
 ---
 
 ## Session Continuity
 
-**Last session:** 2026-05-19T04:04:57.666Z
-**Next action:** `/gsd:verify-phase 1` — Tick Recording Infrastructure 검증 (3/3 플랜 완료)
+**Last session:** 2026-05-19T04:10:15.381Z
+**Next action:** `/gsd:verify-phase 2` — Backtest Engine 검증 (3/3 플랜 완료)
 
 ---
 *State initialized: 2026-05-19*
