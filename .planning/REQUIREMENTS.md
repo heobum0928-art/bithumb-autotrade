@@ -9,7 +9,7 @@
 
 ### 데이터 수집 (Recording)
 
-- [ ] **REC-01**: 봇이 기록 전용 모드(`RECORD_ONLY`)로 동작 — 실거래 주문을 차단하고 데이터 수집만 수행
+- [x] **REC-01**: 봇이 기록 전용 모드(`RECORD_ONLY`)로 동작 — 실거래 주문을 차단하고 데이터 수집만 수행
 - [x] **REC-02**: pump_tracker가 펌핑 감지 코인의 초 단위 가격 틱을 DB 테이블에 저장
 - [x] **REC-03**: 틱 데이터에 lookahead 방지를 위해 거래소 시각/수신 시각이 구분되어 기록됨
 - [x] **REC-04**: WebSocket 단절 시 틱 데이터의 갭이 감지·기록되어 백테스트가 오염 구간을 식별 가능
@@ -58,7 +58,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REC-01 | Phase 1 | Pending |
+| REC-01 | Phase 1 | Complete |
 | REC-02 | Phase 1 | Complete |
 | REC-03 | Phase 1 | Complete |
 | REC-04 | Phase 1 | Complete |
