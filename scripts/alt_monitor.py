@@ -108,6 +108,10 @@ PULLBACK_ENTRY_KRW   = 30_000 # 소액 테스트 진입금액
 PULLBACK_HOLD_MIN    = 90     # 눌림목 전용 최소 보유 90초 (반등은 빠름)
 PULLBACK_TP_HALF     = 0.04   # 눌림목 전용 1차 익절 +4% (슬리피지+수수료 핸디캡 상회)
 
+# 펌핑 틱 추적 파라미터 (Phase 01 — 틱 기록 인프라)
+PUMP_TRACK_SEC       = 600    # 펌핑 틱 추적 지속시간 10분 (D-05)
+GAP_THRESHOLD_SEC    = 30     # 직전 틱과 recv_ts 간격이 이 값 이상이면 WS 갭으로 판정 (D-12, 예상 10초의 3배)
+
 # 선진입(거래량 선행) 파라미터
 PRE_ENABLED          = False  # 데이터 기반 비활성화 (14% 승률, 손실 지속)
 PRE_VOL_MULT         = 12.0  # 최근 10초 거래량이 이전 대비 12배 (8→12, 가짜신호 감소)
@@ -197,7 +201,8 @@ def start_pump_tracker(tracker: "PriceTracker") -> None:
         # item: [pump_id, coin, base_price, start_time,
         #        peak_price, peak_at_sec, min_price_after_peak,
         #        pullback_hit, bounce_hit,
-        #        done_1m, done_2m, done_3m, done_5m]
+        #        done_1m, done_2m, done_3m, done_5m,
+        #        tick_seq, last_recv_ts]
         pending = []
         while True:
             try:
@@ -211,7 +216,7 @@ def start_pump_tracker(tracker: "PriceTracker") -> None:
             for item in pending:
                 (pid, coin, base, t0, peak, peak_sec,
                  min_after_peak, pullback_hit, bounce_hit,
-                 d1, d2, d3, d5) = item
+                 d1, d2, d3, d5, tick_seq, last_recv) = item
 
                 p = tracker.get_latest_price(coin)
                 elapsed = now - t0
@@ -266,7 +271,8 @@ def start_pump_tracker(tracker: "PriceTracker") -> None:
                     except Exception:
                         pass
 
-                if not item[12]:  # 5분 미완료면 계속 추적
+                # 종료 조건: elapsed 기반 10분 추적 (D-05). 5분 집계는 위에서 그대로 저장됨.
+                if elapsed < PUMP_TRACK_SEC:
                     still.append(item)
 
             pending = still
@@ -347,11 +353,13 @@ def queue_pump(pump_id: int, coin: str, base_price: float) -> None:
         # [pump_id, coin, base_price, start_time,
         #  peak_price, peak_at_sec, min_price_after_peak(낙폭최저),
         #  pullback_hit, bounce_hit,
-        #  done_1m, done_2m, done_3m, done_5m]
+        #  done_1m, done_2m, done_3m, done_5m,
+        #  tick_seq, last_recv_ts]   # [13]=다음 INSERT seq, [14]=직전 틱 recv_ts
         _pump_queue.put([pump_id, coin, base_price, now,
                          base_price, 0, 0.0,
                          False, False,
-                         False, False, False, False])
+                         False, False, False, False,
+                         0, 0.0])
 
 
 # ── 프로세스 중복 방지 ─────────────────────────────────────────────────────────
