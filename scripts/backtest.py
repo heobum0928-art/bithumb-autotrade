@@ -98,6 +98,72 @@ class DataSlice:
         return self._ticks[: self._cursor + 1]
 
 
+def _close(entry: dict, exit_tick: dict, slippage: float, reason: str) -> dict:
+    """청산 시 Trade dict 생성. 청산 체결가는 exit_tick price에 매도 슬리피지 반영."""
+    exit_price = _apply_slip(exit_tick["price"], slippage, "sell")
+    return {
+        "entry_ts":    entry["ts"],
+        "entry_price": entry["price"],
+        "exit_ts":     exit_tick["exchange_ts"],
+        "exit_price":  exit_price,
+        "exit_reason": reason,
+        "hold_sec":    int(exit_tick["exchange_ts"] - entry["ts"]),
+        "pnl_pct":     _net_pnl_pct(entry["price"], exit_price),
+        "slippage":    slippage,
+    }
+
+
+def simulate_event(ticks: list[dict], slippage: float) -> dict | None:
+    """한 펌핑 이벤트의 틱을 시간순 재생해 눌림목 진입·청산을 시뮬레이션 (BT-02).
+
+    상태 머신 WAITING_ENTRY -> IN_POSITION. 진입은 주행 고점 대비 -ENTRY_DROP_PCT
+    눌림 시 충족되며, 진입·청산 체결가 모두 "다음 틱"(cursor+1) price를 쓴다
+    (D-04/D-07 lookahead 방지). 갭 틱(gap_before=1)은 TP/SL 판정에서 제외한다 (D-09).
+
+    Return: 청산된 Trade dict, 진입 못 하거나 틱 부족 시 None.
+    """
+    if len(ticks) < MIN_TICKS:        # 데이터 부족 스킵 (Discretion)
+        return None
+
+    sl = DataSlice(ticks)
+    running_peak = ticks[0]["price"]
+    state = "WAITING_ENTRY"
+    entry = None
+
+    while sl.cursor < len(ticks):
+        tick = sl.current
+        running_peak = max(running_peak, tick["price"])   # D-02 동적 고점 (미래 아님)
+
+        if state == "WAITING_ENTRY":
+            drawdown = (tick["price"] - running_peak) / running_peak
+            if drawdown <= -ENTRY_DROP_PCT:               # D-02 -7% 눌림
+                # D-04: 다음 틱 체결. 마지막 틱에서 충족 시 다음 틱 없음 -> 무진입
+                if sl.cursor + 1 >= len(ticks):
+                    return None
+                fill = ticks[sl.cursor + 1]["price"]
+                entry = {
+                    "price":    _apply_slip(fill, slippage, "buy"),
+                    "tick_idx": sl.cursor + 1,
+                    "ts":       ticks[sl.cursor + 1]["exchange_ts"],
+                }
+                state = "IN_POSITION"
+
+        elif state == "IN_POSITION":
+            # D-09: 갭 틱은 TP/SL 돌파 판정 건너뜀 (running_peak 갱신은 위에서 이미 수행)
+            if tick["gap_before"] != 1:
+                chg = (tick["price"] - entry["price"]) / entry["price"]
+                hit = "익절" if chg >= TP_PCT else ("손절" if chg <= -SL_PCT else None)
+                if hit and sl.cursor + 1 < len(ticks):    # D-07 다음 틱 체결
+                    return _close(entry, ticks[sl.cursor + 1], slippage, hit)
+
+        sl.advance()
+
+    # D-06 시간초과: 틱 소진. IN_POSITION이면 마지막 틱 price로 강제 청산
+    if state == "IN_POSITION":
+        return _close(entry, ticks[-1], slippage, "시간초과")
+    return None   # 진입 못 함
+
+
 def _self_test() -> bool:
     """DataSlice의 lookahead 차단 동작을 코드로 검증한다 (BT-03)."""
     ticks = [{"price": p} for p in range(10)]
