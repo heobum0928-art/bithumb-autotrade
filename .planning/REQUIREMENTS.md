@@ -16,9 +16,9 @@
 
 ### 백테스트 엔진 (Backtest)
 
-- [ ] **BT-01**: 백테스트 엔진이 봇 코드와 완전 분리된 오프라인 스크립트로 동작 (DB 읽기 전용)
+- [x] **BT-01**: 백테스트 엔진이 봇 코드와 완전 분리된 오프라인 스크립트로 동작 (DB 읽기 전용)
 - [ ] **BT-02**: 틱 데이터를 시간순 재생하며 진입 조건 평가·가상 포지션 청산을 시뮬레이션
-- [ ] **BT-03**: 진입 판정에 미래 정보(lookahead)를 사용하지 않음 — 진입 시점에 알 수 있는 데이터만 사용
+- [x] **BT-03**: 진입 판정에 미래 정보(lookahead)를 사용하지 않음 — 진입 시점에 알 수 있는 데이터만 사용
 - [ ] **BT-04**: 수수료(왕복 0.5%)와 슬리피지(기본 1%)를 상수 파라미터로 손익 계산에 반영
 - [ ] **BT-05**: 백테스트 결과로 승률·EV·MDD·거래수 지표를 출력
 
@@ -62,9 +62,9 @@
 | REC-02 | Phase 1 | Complete |
 | REC-03 | Phase 1 | Complete |
 | REC-04 | Phase 1 | Complete |
-| BT-01 | Phase 2 | Pending |
+| BT-01 | Phase 2 | Complete |
 | BT-02 | Phase 2 | Pending |
-| BT-03 | Phase 2 | Pending |
+| BT-03 | Phase 2 | Complete |
 | BT-04 | Phase 2 | Pending |
 | BT-05 | Phase 2 | Pending |
 | VAL-01 | Phase 3 | Pending |

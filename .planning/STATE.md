@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-05-19T03:22:25.080Z"
+last_updated: "2026-05-19T04:01:32.336Z"
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 6
+  completed_plans: 4
   percent: 100
 ---
 
@@ -18,14 +18,14 @@ progress:
 
 **Core Value:** 검증되지 않은 전략에는 실제 돈을 넣지 않는다 — 데이터 → 백테스트 → 검증 통과한 것만 실거래로 간다
 
-**Current Focus:** Phase 01 — tick-recording-infrastructure
+**Current Focus:** Phase 02 — backtest-engine
 
 ---
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
+Phase: 02 (backtest-engine) — EXECUTING
+Plan: 2 of 3
 | Field | Value |
 |-------|-------|
 | Milestone | 검증 체계 전환 |
@@ -64,6 +64,8 @@ Phase 1: [~] Phase 2: [ ] Phase 3: [ ]
 | 거래소 시각 별도 _ex_ts dict 보관 | deque 튜플 3원소 불변 유지 — get_signal/get_preemptive_signal 무중단 (01-02) | 2026-05-19 |
 | 펌핑 추적 5분→10분 연장 (D-05) | pump_log 5분 집계는 유지, 루프 종료만 elapsed 기반으로 분리 — 약 60틱/이벤트 축적 (01-03) | 2026-05-19 |
 | 라이브 타임존 검증 통과 | 빗썸 WS exchange_ts vs recv_ts 델타 0.65~0.72초 — KST(UTC+9) 가정 정확, ±9h 오류 없음 (01-03) | 2026-05-19 |
+| DataSlice로 lookahead 코드 차단 | 판정 함수에 원본 list 대신 커서 래퍼 전달, 미래 인덱스 접근 시 IndexError — bias를 런타임에 물리 차단 (02-01) | 2026-05-19 |
+| 백테스트 DB 읽기 전용 | load_events는 SELECT만 — INSERT/UPDATE/DELETE/CREATE 미사용, 봇 데이터 무오염 보장 (02-01) | 2026-05-19 |
 
 ### Known Constraints
 
@@ -91,7 +93,7 @@ Phase 1: [~] Phase 2: [ ] Phase 3: [ ]
 
 ## Session Continuity
 
-**Last session:** 2026-05-19T03:22:25.077Z
+**Last session:** 2026-05-19T04:01:32.333Z
 **Next action:** `/gsd:verify-phase 1` — Tick Recording Infrastructure 검증 (3/3 플랜 완료)
 
 ---
