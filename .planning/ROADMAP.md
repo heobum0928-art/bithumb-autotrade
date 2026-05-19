@@ -42,7 +42,7 @@
   5. 백테스트 결과로 승률·EV·MDD·거래수·95% 신뢰구간이 출력된다
 **Plans**: 3 plans
 - [x] 02-01-PLAN.md — 스크립트 골격 + 전략 상수 + DataSlice lookahead 차단 + load_events
-- [ ] 02-02-PLAN.md — 비용 헬퍼 + simulate_event 틱 재생 진입/청산 시뮬레이션
+- [x] 02-02-PLAN.md — 비용 헬퍼 + simulate_event 틱 재생 진입/청산 시뮬레이션
 - [ ] 02-03-PLAN.md — 지표 계산(EV·MDD·CI) + 슬리피지 4시나리오 리포트 + CSV 출력
 
 ### Phase 3: Strategy Validation
