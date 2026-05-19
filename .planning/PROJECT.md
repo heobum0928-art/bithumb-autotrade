@@ -23,13 +23,13 @@
 - ✓ 눌림목 진입 전략 (지정가 매수, -7% 타겟) — existing
 - ✓ 봇 기록 전용 모드 (RECORD_ONLY 게이트, 실거래 차단) — Validated in Phase 1
 - ✓ 초 단위 틱 경로 저장 (pump_ticks 테이블, log_tick 10초 루프 배선) — Validated in Phase 1
+- ✓ 백테스트 엔진 (scripts/backtest.py — 틱 재생, lookahead 차단, EV·승률·MDD·슬리피지 4시나리오) — Validated in Phase 2
 
 ### Active
 
 <!-- 이번 마일스톤 목표 — 검증 전엔 가설 -->
 
 - [ ] 충분한 틱 데이터셋 축적 (2~3주, 실거래 위험 0)
-- [ ] 백테스트 엔진 제작 (틱 데이터로 전략을 실거래 없이 시뮬레이션)
 - [ ] 전략 검증 사이클 확립 (가설 → 백테스트 → out-of-sample → 페이퍼)
 - [ ] 데이터 기반 전략 결론 도출 (EV 양수/음수 명확히 판정)
 
@@ -70,6 +70,8 @@
 | GSD 방식 채택 | 즉흥 변경 사이클을 끊고 조사→계획→검증 규율 강제 | — Pending |
 | RECORD_ONLY 기본값 True | 설정 누락/로드 실패 시에도 실거래가 차단되는 안전한 쪽으로 동작 | ✓ Phase 1 |
 | 거래소/수신 시각 분리 저장 | exchange_ts vs recv_ts로 백테스트가 수집 지연·오염 구간 식별 가능 | ✓ Phase 1 |
+| DataSlice로 lookahead 물리 차단 | 백테스트가 미래 틱 인덱스 접근 시 IndexError로 즉시 실패 — 검증 신뢰성 확보 | ✓ Phase 2 |
+| 슬리피지 4시나리오 동시 산출 | 0/0.5/1/2% 비교 테이블로 비용 민감도 노출, EV 견고성 판단 | ✓ Phase 2 |
 
 ## Evolution
 
@@ -89,4 +91,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-19 after Phase 1 (Tick Recording Infrastructure) completion*
+*Last updated: 2026-05-19 after Phase 2 (Backtest Engine) completion*
