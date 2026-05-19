@@ -21,6 +21,23 @@ ROUND_TRIP_FEE   = 0.005                       # 왕복 수수료 0.5%
 SLIPPAGE_SCENARIOS = (0.0, 0.005, 0.01, 0.02)  # D-11: 항상 4행
 
 
+def _apply_slip(price: float, slippage: float, side: str) -> float:
+    """슬리피지를 체결가에 반영. 매수는 비싸게(+), 매도는 싸게(-).
+
+    슬리피지는 체결가에만 반영된다 — 손익률에서 또 빼지 않는다 (이중 계산 금지).
+    """
+    return price * (1 + slippage) if side == "buy" else price * (1 - slippage)
+
+
+def _net_pnl_pct(entry: float, exit_price: float) -> float:
+    """진입가, 청산가(슬리피지 이미 반영됨) -> 왕복 수수료 차감 순손익률.
+
+    수수료(ROUND_TRIP_FEE)는 손익률에서만 차감된다 — 체결가에 또 넣지 않는다.
+    """
+    gross = (exit_price - entry) / entry
+    return gross - ROUND_TRIP_FEE
+
+
 def load_events(db_path) -> list[dict]:
     """백테스트 대상 펌핑 이벤트 목록. pump_ticks 행이 있는 이벤트만, detected_at 순.
 
