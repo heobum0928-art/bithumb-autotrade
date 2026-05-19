@@ -55,7 +55,10 @@
   3. 결과 리포트가 코인별, 진입 시간대별로 분해되어 "특정 코인/시간대에만 편향이 있는가"를 확인할 수 있다
   4. 표본 수가 사전 정의한 최소 기준(MIN_SAMPLE)에 미달하거나 신뢰구간이 허용 폭을 초과할 때 코드가 경고를 출력하며 결론 선언을 막는다
   5. 최종 리포트에 "GO: test 셋 EV 양수, 전략 유효" 또는 "NO-GO: test 셋 EV 음수/불충분, 전략 폐기" 판정이 명시된다
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 03-01-PLAN.md — backtest.py 리팩터: 전략 상수를 Strategy 데이터클래스로 파라미터화
+- [ ] 03-02-PLAN.md — validate.py: EventSplit train/test 분할 배리어 + 36조합 그리드 서치
+- [ ] 03-03-PLAN.md — validate.py: OOS 검증 + 코인/시간대 분해 + GO/NO-GO 판정 + 리포트
 
 ---
 
@@ -65,7 +68,7 @@
 |-------|----------------|--------|-----------|
 | 1. Tick Recording Infrastructure | 0/3 | Not started | - |
 | 2. Backtest Engine | 3/3 | Complete   | 2026-05-19 |
-| 3. Strategy Validation | 0/? | Not started | - |
+| 3. Strategy Validation | 0/3 | Not started | - |
 
 ---
 
