@@ -1721,8 +1721,8 @@ def run():
 
             # BB%B 필터: 볼린저밴드 과도 돌파(>1.1) 차단 - 극도 과열, 되돌림 위험
             _bb = _indic.get("bb_pct")
-            if _bb is not None and _bb > 1.38:
-                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.38 과열 - 진입 취소")
+            if _bb is not None and _bb > 1.7:
+                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.7 과열 - 진입 취소")
                 try:
                     sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
