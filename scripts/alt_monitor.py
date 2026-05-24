@@ -83,11 +83,11 @@ WINDOW_SEC           = 60
 PRICE_THRESH         = 0.05
 VOLUME_MULT          = 5.0   # 7→5, RSI/MACD 복합 조건으로 보완
 ALT_ENTRY_RATIO      = 0.05  # 0.10→0.05, 손실 최소화 (50,000원)
-TP_HALF              = 0.015  # 빠른 익절 +1.5% (손실 방어 우선)
+TP_HALF              = 0.03   # 즉시진입 전략 +3% (데이터: 41% 달성)
 TRAIL_PCT            = 0.02   # 트레일 2%
 TIGHT_TRAIL          = 0.015  # 2차 트레일 1.5%
 HOLD_MIN_SEC         = 600    # 진입 후 최소 10분 보유
-INITIAL_STOP_PCT     = -0.015  # 초기 보유 중 급락 손절 -1.5% (손실 최소화)
+INITIAL_STOP_PCT     = -0.03   # 즉시진입 전략 -3% (짧은 손절→휩쏘 방지)
 DAILY_LIMIT_PCT      = -0.05
 MIN_KRW              = 5001
 COOLDOWN_SEC         = 120
@@ -100,7 +100,7 @@ TICK_BUY_RATIO       = 0.60
 VOLUME_POWER_MIN     = 100.0
 
 # 눌림목(풀백) 전략 파라미터
-PULLBACK_ENABLED     = True   # 즉시 매수 대신 눌림목 대기
+PULLBACK_ENABLED     = False  # 즉시 진입 전략 (눌림목 -7%: EV -2.9%, 즉시진입: TP41%)
 NEWLISTING_ENABLED   = False  # 신규 상장 즉시 진입 비활성화 (눌림목 전략으로 전환)
 PULLBACK_TARGET_PCT  = -0.07  # 고점 대비 -7% 눌림 시 진입 (깊은 눌림만, +EV 구간)
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
@@ -1715,8 +1715,8 @@ def run():
 
             # BB%B 필터: 볼린저밴드 과도 돌파(>1.1) 차단 - 극도 과열, 되돌림 위험
             _bb = _indic.get("bb_pct")
-            if _bb is not None and _bb > 1.3:
-                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.3 과열 - 진입 취소")
+            if _bb is not None and _bb > 1.38:
+                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.38 과열 - 진입 취소")
                 try:
                     sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
