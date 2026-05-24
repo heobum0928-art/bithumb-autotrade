@@ -1099,7 +1099,8 @@ def run():
                 log.error(f"[DB] 외부청산 저장 실패: {e}")
             clear_active()
             if ext_pnl < 0:
-                loss_coins[saved_coin] = time.time()
+                loss_coins = record_loss_coin(
+                    loss_coins, saved_coin, ext_pct, "외부청산 (재시작 시 잔고 없음)")
                 save_loss_coins(loss_coins)
         else:
             log.info(f"[복구] 저장된 포지션: {saved_coin} - 모니터링 재개")
@@ -1349,7 +1350,12 @@ def run():
                                            f"1차익절 {pnl_pct*100:+.1f}%")
                         if received is not None:
                             recv_krw += received
-                        sold_vol += half_vol
+                            sold_vol += half_vol
+                            partial_pnl = recv_krw - (total_cost * (sold_vol / total_vol))
+                            notify.send(
+                                f"<b>[{coin}] 1차 익절 +{pnl_pct*100:.1f}%</b>\n"
+                                f"절반 매도 완료 | 나머지 트레일 {TIGHT_TRAIL*100:.1f}%로 추적 중"
+                            )
                         phase    = 2
                         trail    = TIGHT_TRAIL
                         highest  = current
