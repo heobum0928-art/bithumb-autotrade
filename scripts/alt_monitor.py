@@ -95,16 +95,32 @@ MIN_COIN_PRICE       = 10
 MAX_DAILY_TRADES     = 30
 MIN_TRADE_KRW_PER_MIN = 1_000_000
 BTC_DROP_LIMIT       = -0.015
-OB_BID_RATIO         = 1.5
+OB_BID_RATIO         = 0.0   # 비활성화: 펌핑 시 구조적으로 bid<ask → 1.5 기준은 모든 신호 차단
 TICK_BUY_RATIO       = 0.60
+# 시간대 필터 (KST): 반등률 0~15% 구간 진입 금지
+DEAD_HOURS_KST: set[int] = {6, 7, 11, 12, 13, 14, 15}  # 데이터: 이 시간대 반등률 0~15%
+
+# 실거래 손실 또는 pump_log 반등 0% 확인 코인 — 진입 금지
+# (제거: SUNDOG+11,472원, PUFFER+7,147원, DAO+14,096원, XION+13,483원 — 실거래 이익 확인)
+COIN_BLACKLIST: set[str] = {
+    "PROS", "UP", "RSS3",   # pump_log 반등 0% + UP 실거래 -1,820원(3건)
+    "AQT", "BMT", "FCT2",   # pump_log 반등 0%, 실거래 손실
+}
+
+# 즉시진입 코인: 눌림목 대기 없이 신호 발생 시 바로 매수
+# (실거래 검증: META 4건 100% 승률 / WNCG pump_log 강반등 패턴)
+IMMEDIATE_ENTRY_COINS: set[str] = {
+    "META",   # 4건 100% 승률, +1,491원 실거래 검증
+    "WNCG",   # pump_log 강력한 반등 패턴 확인
+}
 VOLUME_POWER_MIN     = 100.0
 
 # 눌림목(풀백) 전략 파라미터
-PULLBACK_ENABLED     = False  # 즉시 진입 전략 (눌림목 -7%: EV -2.9%, 즉시진입: TP41%)
-NEWLISTING_ENABLED   = False  # 신규 상장 즉시 진입 비활성화 (눌림목 전략으로 전환)
-PULLBACK_TARGET_PCT  = -0.07  # 고점 대비 -7% 눌림 시 진입 (깊은 눌림만, +EV 구간)
+PULLBACK_ENABLED     = True   # 눌림목 전략: 낙폭 3~5% 구간 반등률 61% (데이터 검증)
+NEWLISTING_ENABLED   = False  # 신규 상장 즉시 진입 비활성화
+PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입 (황금구간 3~5%)
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
-PULLBACK_ENTRY_KRW   = 30_000 # 소액 테스트 진입금액
+PULLBACK_ENTRY_KRW   = 50_000 # 진입금액 (기존 ALT_ENTRY_RATIO 기준 맞춤)
 PULLBACK_HOLD_MIN    = 90     # 눌림목 전용 최소 보유 90초 (반등은 빠름)
 PULLBACK_TP_HALF     = 0.04   # 눌림목 전용 1차 익절 +4% (슬리피지+수수료 핸디캡 상회)
 
@@ -1663,6 +1679,20 @@ def run():
 
             best     = max(found, key=lambda x: x["vol_mult"])
             coin     = best["coin"]
+
+            # 반등 패턴 없는 코인 차단 (데이터 검증: SUNDOG 10%, PUFFER 21%)
+            if coin in COIN_BLACKLIST:
+                log.info(f"[{coin}] 블랙리스트 코인 - 진입 취소")
+                time.sleep(SCAN_SEC)
+                continue
+
+            # 시간대 필터: 반등률 0~15% 사망 구간 차단 (KST = UTC+9)
+            _hour_kst = (datetime.utcnow().hour + 9) % 24
+            if _hour_kst in DEAD_HOURS_KST:
+                log.info(f"[{coin}] 사망 시간대 {_hour_kst}시 KST - 진입 취소")
+                time.sleep(SCAN_SEC)
+                continue
+
             mode_tag = " [엄격]" if strict_mode else ""
             log.warning(
                 f"*** [진입 신호{mode_tag}] {coin} | "
@@ -1769,8 +1799,10 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # ── 눌림목 대기 중 신호 기록 후 스킵 ─────────────────────────
-            if PULLBACK_ENABLED:
+            # ── 코인별 전략 분기 ─────────────────────────────────────────
+            # IMMEDIATE_ENTRY_COINS: 즉시 진입 (눌림목 대기 스킵)
+            # 나머지: PULLBACK_ENABLED=True면 눌림목 대기
+            if PULLBACK_ENABLED and coin not in IMMEDIATE_ENTRY_COINS:
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
