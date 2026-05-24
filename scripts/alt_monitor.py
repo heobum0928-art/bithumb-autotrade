@@ -1574,6 +1574,13 @@ def run():
                 time.sleep(SCAN_SEC * 3)
                 continue
 
+            # 시간대 필터: 데이터 444건 기준 수익 가능한 시간대만 허용
+            # 19시: 40% / 01시: 13% / 나머지: 0~5%
+            _kst_hour = datetime.now(KST).hour
+            if _kst_hour not in {0, 1, 19}:
+                time.sleep(30)
+                continue
+
             holdings = get_holdings(client)
             if holdings:
                 log.info(f"[보유중] {', '.join(holdings)} - 해당 코인 신호 무시")
