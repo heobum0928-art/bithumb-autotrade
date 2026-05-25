@@ -116,7 +116,7 @@ IMMEDIATE_ENTRY_COINS: set[str] = {
 VOLUME_POWER_MIN     = 100.0
 
 # 눌림목(풀백) 전략 파라미터
-PULLBACK_ENABLED     = True   # 눌림목 전략: 낙폭 3~5% 구간 반등률 61% (데이터 검증)
+PULLBACK_ENABLED     = False  # 비활성화: 과매도 반등 전략으로 전환 (2026-05-25)
 NEWLISTING_ENABLED   = False  # 신규 상장 즉시 진입 비활성화
 PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입 (황금구간 3~5%)
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
