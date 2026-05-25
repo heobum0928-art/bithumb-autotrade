@@ -63,6 +63,32 @@ def calc_macd_bull(candles: list[dict],
     return macd_line[-1] > signal_line[-1]
 
 
+def calc_ema(candles: list[dict], period: int = 9) -> float | None:
+    """Return latest EMA value (exponential moving average)."""
+    closes = _closes(candles)
+    if len(closes) < period:
+        return None
+    k = 2 / (period + 1)
+    ema = closes[0]
+    for price in closes[1:]:
+        ema = price * k + ema * (1 - k)
+    return round(ema, 8)
+
+
+def is_ema_bouncing(candles: list[dict], period: int = 9) -> bool:
+    """EMA 반등 확인: 현재가 > EMA9 이고 최근 캔들이 양봉(close > open).
+    van de Poppe 방식: 눌림목 후 EMA 위로 회복 = 반등 시작 신호."""
+    closes = _closes(candles)
+    ema = calc_ema(candles, period)
+    if ema is None or len(candles) < 2:
+        return False
+    latest_close = closes[-1]
+    latest_open = float(candles[0]["opening_price"])  # candles newest-first
+    green_candle = latest_close >= latest_open        # 최근 캔들 양봉
+    above_ema = latest_close > ema                    # EMA 위로 회복
+    return green_candle and above_ema
+
+
 def snapshot(client, market: str) -> dict:
     """Fetch 35 1-min candles and return indicator dict. Never raises."""
     result = {"rsi": None, "bb_pct": None, "macd_bull": None}

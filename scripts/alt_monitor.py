@@ -52,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
 from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, log_pump, update_pump_path, log_tick, DB_PATH
-from bithumb.indicators import snapshot as indicator_snapshot
+from bithumb.indicators import snapshot as indicator_snapshot, is_ema_bouncing
 from bithumb import notify
 
 logging.basicConfig(
@@ -325,8 +325,11 @@ def queue_pullback(coin: str, peak_price: float) -> None:
     notify.send(f"👀 [눌림목대기] {coin}\n고점={peak_price:,.3f}원 → -7% 눌림 기다리는 중")
 
 
-def start_pullback_tracker(tracker: "PriceTracker") -> None:
-    """고점 추적 → -2% 눌림목 달성 시 메인루프에 진입 신호 전달."""
+EMA_CONFIRM_SEC = 60   # 눌림목 달성 후 EMA 반등 확인 대기 최대 60초
+
+def start_pullback_tracker(tracker: "PriceTracker", client) -> None:
+    """고점 추적 → 눌림목 달성 후 EMA9 반등 확인 → 메인루프 진입 신호 전달.
+    van de Poppe 방식: 낙폭 구간 진입이 아닌 반등 확인 후 진입으로 휩쏘 방지."""
     def _run():
         pending: list[dict] = []
         while True:
@@ -351,25 +354,58 @@ def start_pullback_tracker(tracker: "PriceTracker") -> None:
                     still.append(item)
                     continue
 
-                # 고점 갱신
-                if current > item["peak"]:
+                # 고점 갱신 (눌림목 달성 전까지만)
+                if not item.get("pb_hit") and current > item["peak"]:
                     item["peak"] = current
 
                 drop = (current - item["peak"]) / item["peak"]
                 log.debug(f"[눌림목] {coin} 현재={current:,.3f} 고점={item['peak']:,.3f} 낙폭={drop*100:.1f}%")
 
-                if drop <= PULLBACK_TARGET_PCT:
+                # 눌림목 달성: EMA 확인 대기 시작
+                if not item.get("pb_hit") and drop <= PULLBACK_TARGET_PCT:
+                    item["pb_hit"]    = True
+                    item["pb_price"]  = current
+                    item["pb_t"]      = now
                     log.warning(
                         f"[눌림목 달성] {coin} | 고점={item['peak']:,.3f}원 → "
-                        f"현재={current:,.3f}원 ({drop*100:.1f}%) → 진입 신호 전송"
+                        f"현재={current:,.3f}원 ({drop*100:.1f}%) → EMA9 반등 확인 대기..."
                     )
                     notify.send(
-                        f"🎯 [눌림목 달성] {coin}\n"
+                        f"👀 [눌림목 달성] {coin}\n"
                         f"고점={item['peak']:,.3f}원 → 현재={current:,.3f}원 ({drop*100:.1f}%)\n"
-                        f"→ 진입 시도 중..."
+                        f"EMA9 반등 확인 중..."
                     )
-                    _entry_ready.put({"coin": coin, "price": current, "ts": time.time()})
-                    continue  # 대기 목록에서 제거 (진입 큐로 넘김)
+                    still.append(item)
+                    continue
+
+                # EMA9 반등 확인 단계
+                if item.get("pb_hit"):
+                    pb_elapsed = now - item["pb_t"]
+                    if pb_elapsed > EMA_CONFIRM_SEC:
+                        log.info(f"[눌림목] {coin} EMA 반등 미확인 {EMA_CONFIRM_SEC}초 타임아웃 - 포기")
+                        continue
+                    try:
+                        candles = client.get_candles(f"KRW-{coin}", unit=1, count=15)
+                        confirmed = is_ema_bouncing(candles)
+                    except Exception:
+                        confirmed = False
+
+                    if confirmed:
+                        log.warning(
+                            f"[눌림목+EMA확인] {coin} | EMA9 반등 확인 → 진입 신호 전송 "
+                            f"(확인까지 {pb_elapsed:.0f}초)"
+                        )
+                        notify.send(
+                            f"🎯 [눌림목+EMA확인] {coin}\n"
+                            f"고점={item['peak']:,.3f}원 → 현재={current:,.3f}원\n"
+                            f"EMA9 반등 확인 완료 → 진입 시도 중..."
+                        )
+                        _entry_ready.put({"coin": coin, "price": current, "ts": time.time()})
+                        continue
+                    else:
+                        log.debug(f"[눌림목] {coin} EMA 반등 미확인 ({pb_elapsed:.0f}초 경과)")
+                        still.append(item)
+                        continue
 
                 still.append(item)
 
@@ -1053,7 +1089,7 @@ def run():
     time.sleep(5)
     start_outcome_tracker(tracker)
     start_pump_tracker(tracker)
-    start_pullback_tracker(tracker)
+    start_pullback_tracker(tracker, client)
 
     log.info("=== ALT 모멘텀 봇 시작 [논블로킹 단일루프] ===")
     log.info(
