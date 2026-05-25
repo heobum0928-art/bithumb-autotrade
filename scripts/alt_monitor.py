@@ -256,7 +256,7 @@ def start_oversold_monitor(client) -> None:
 
             for coin in candidates:
                 try:
-                    candles = client.get_candles(f"KRW-{coin}", unit=1, count=35)
+                    candles = client.get_candles(f"KRW-{coin}", unit=3, count=50)
                     rsi = calc_rsi(candles)
                     if rsi is None:
                         time.sleep(1)
