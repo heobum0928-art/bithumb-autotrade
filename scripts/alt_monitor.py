@@ -1504,13 +1504,15 @@ def run():
                             time.sleep(SCAN_SEC)
                             continue
 
-                        # 급락 손절 (신규상장 -5%, 선진입 -3%, 일반 -5%)
+                        # 급락 손절 (과매도 -2%, 신규상장 -5%, 선진입 -3%, 일반 -3%)
                         stop_pct = (NEW_LIST_STOP    if entry_type == "newlisting"
                                     else PRE_HARD_STOP if entry_type == "preemptive"
+                                    else OVERSOLD_SL_PCT if entry_type == "oversold"
                                     else INITIAL_STOP_PCT)
                         if pnl_pct <= stop_pct:
                             tag    = ("[신규상장] " if entry_type == "newlisting"
                                       else "[선진입] " if entry_type == "preemptive"
+                                      else "[과매도] " if entry_type == "oversold"
                                       else "")
                             reason = f"{tag}초기손절 {pnl_pct*100:+.1f}% (진입 {hold_min:.0f}분, 급락)"
                             received = do_sell(client, pos, total_vol - sold_vol, reason)
