@@ -164,6 +164,7 @@ OVERSOLD_PUMP_MIN      = 30.0   # 24h 상승률 +30% 이상 코인만 대상
 _oversold_candidates: set[str] = set()           # 현재 후보 코인 목록
 _oversold_scan_ts: float       = 0.0             # 마지막 스캔 시각
 _oversold_rsi_state: dict[str, str] = {}         # coin → "idle" | "watching"
+_oversold_cross_count: dict[str, int] = {}       # coin → RSI≥30 연속 횟수 (2회 확인 후 진입)
 
 STATE_FILE      = Path("data/active_pos.json")
 LOCK_FILE       = Path("data/bot.lock")
@@ -253,6 +254,7 @@ def start_oversold_monitor(client) -> None:
             for c in list(_oversold_rsi_state.keys()):
                 if c not in _oversold_candidates:
                     del _oversold_rsi_state[c]
+                    _oversold_cross_count.pop(c, None)
 
             for coin in candidates:
                 try:
@@ -270,31 +272,45 @@ def start_oversold_monitor(client) -> None:
 
                     elif state == "watching":
                         if rsi >= 30:
-                            macd_ok = calc_macd_bull(candles)
-                            ema_ok  = _ema_bounce(candles)
-                            if macd_ok and ema_ok:
-                                current = float(candles[0]["trade_price"])
-                                log.warning(
-                                    f"[OVERSOLD] {coin} RSI={rsi:.1f} MACD↑ EMA9↑ → 진입 신호!"
-                                )
-                                notify.send(
-                                    f"🌊 [과매도 반등] {coin}\n"
-                                    f"RSI={rsi:.1f} MACD↑ EMA9↑ → 진입 시도 중..."
-                                )
-                                _entry_ready.put({
-                                    "coin": coin,
-                                    "price": current,
-                                    "ts": time.time(),
-                                    "type": "oversold",
-                                })
-                                _oversold_rsi_state[coin] = "idle"
-                            else:
-                                log.debug(
+                            # 2캔들 연속 RSI≥30 확인 후 진입 (페이크 크로스 방지)
+                            _oversold_cross_count[coin] = _oversold_cross_count.get(coin, 0) + 1
+                            cnt = _oversold_cross_count[coin]
+                            if cnt < 2:
+                                log.info(
                                     f"[OVERSOLD] {coin} RSI={rsi:.1f}≥30 "
-                                    f"MACD={macd_ok} EMA={ema_ok} 조건 미충족"
+                                    f"({cnt}/2 확인 중, 다음 체크 대기)"
                                 )
+                            else:
+                                macd_ok = calc_macd_bull(candles)
+                                ema_ok  = _ema_bounce(candles)
+                                if macd_ok and ema_ok:
+                                    current = float(candles[0]["trade_price"])
+                                    log.warning(
+                                        f"[OVERSOLD] {coin} RSI={rsi:.1f} "
+                                        f"2캔들 확인 MACD↑ EMA9↑ → 진입 신호!"
+                                    )
+                                    notify.send(
+                                        f"🌊 [과매도 반등] {coin}\n"
+                                        f"RSI={rsi:.1f} 2캔들 확인 MACD↑ EMA9↑ → 진입 시도 중..."
+                                    )
+                                    _entry_ready.put({
+                                        "coin": coin,
+                                        "price": current,
+                                        "ts": time.time(),
+                                        "type": "oversold",
+                                    })
+                                    _oversold_rsi_state[coin] = "idle"
+                                    _oversold_cross_count.pop(coin, None)
+                                else:
+                                    log.debug(
+                                        f"[OVERSOLD] {coin} RSI={rsi:.1f}≥30 "
+                                        f"MACD={macd_ok} EMA={ema_ok} 조건 미충족"
+                                    )
                         else:
-                            log.debug(f"[OVERSOLD] {coin} RSI={rsi:.1f} (watching 중)")
+                            # RSI가 다시 30 아래로 → 카운터 리셋
+                            if _oversold_cross_count.get(coin, 0) > 0:
+                                log.debug(f"[OVERSOLD] {coin} RSI={rsi:.1f} < 30 → 카운터 리셋")
+                            _oversold_cross_count[coin] = 0
 
                 except Exception as e:
                     log.debug(f"[OVERSOLD] {coin} 체크 실패: {e}")
