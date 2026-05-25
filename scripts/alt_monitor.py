@@ -165,6 +165,7 @@ _oversold_candidates: set[str] = set()           # 현재 후보 코인 목록
 _oversold_scan_ts: float       = 0.0             # 마지막 스캔 시각
 _oversold_rsi_state: dict[str, str] = {}         # coin → "idle" | "watching"
 _oversold_cross_count: dict[str, int] = {}       # coin → RSI≥30 연속 횟수 (2회 확인 후 진입)
+OVERSOLD_VOL_RATIO   = 1.5                       # 반등 캔들 거래량이 직전 10캔들 평균의 1.5배 이상
 
 STATE_FILE      = Path("data/active_pos.json")
 LOCK_FILE       = Path("data/bot.lock")
@@ -283,15 +284,20 @@ def start_oversold_monitor(client) -> None:
                             else:
                                 macd_ok = calc_macd_bull(candles)
                                 ema_ok  = _ema_bounce(candles)
-                                if macd_ok and ema_ok:
+                                # 반등 거래량 확인: 현재 캔들 거래량 >= 직전 10캔들 평균 × 1.5
+                                vols = [float(c["candle_acc_trade_volume"]) for c in candles[1:11]]
+                                avg_vol = sum(vols) / len(vols) if vols else 0
+                                cur_vol = float(candles[0]["candle_acc_trade_volume"])
+                                vol_ok  = avg_vol == 0 or cur_vol >= avg_vol * OVERSOLD_VOL_RATIO
+                                if macd_ok and ema_ok and vol_ok:
                                     current = float(candles[0]["trade_price"])
                                     log.warning(
                                         f"[OVERSOLD] {coin} RSI={rsi:.1f} "
-                                        f"2캔들 확인 MACD↑ EMA9↑ → 진입 신호!"
+                                        f"2캔들확인 MACD↑ EMA9↑ 거래량{cur_vol/avg_vol:.1f}x → 진입 신호!"
                                     )
                                     notify.send(
                                         f"🌊 [과매도 반등] {coin}\n"
-                                        f"RSI={rsi:.1f} 2캔들 확인 MACD↑ EMA9↑ → 진입 시도 중..."
+                                        f"RSI={rsi:.1f} MACD↑ EMA9↑ 거래량{cur_vol/avg_vol:.1f}x → 진입 시도 중..."
                                     )
                                     _entry_ready.put({
                                         "coin": coin,
@@ -304,7 +310,7 @@ def start_oversold_monitor(client) -> None:
                                 else:
                                     log.debug(
                                         f"[OVERSOLD] {coin} RSI={rsi:.1f}≥30 "
-                                        f"MACD={macd_ok} EMA={ema_ok} 조건 미충족"
+                                        f"MACD={macd_ok} EMA={ema_ok} VOL={cur_vol/avg_vol:.1f}x({vol_ok}) 미충족"
                                     )
                         else:
                             # RSI가 다시 30 아래로 → 카운터 리셋
