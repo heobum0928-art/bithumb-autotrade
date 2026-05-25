@@ -122,7 +122,10 @@ PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입 (황금구
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
 PULLBACK_ENTRY_KRW   = 50_000 # 진입금액 (기존 ALT_ENTRY_RATIO 기준 맞춤)
 PULLBACK_HOLD_MIN    = 90     # 눌림목 전용 최소 보유 90초 (반등은 빠름)
-PULLBACK_TP_HALF     = 0.04   # 눌림목 전용 1차 익절 +4% (슬리피지+수수료 핸디캡 상회)
+PULLBACK_TP_HALF     = 0.05   # 눌림목 1차 익절 +5% (발동선 도입으로 4%→5%)
+PULLBACK_TRAIL_PCT   = 0.03   # 눌림목 전용 트레일 3% (W자 반등 노이즈 흡수, 일반 2%와 분리)
+PULLBACK_TIGHT_TRAIL = 0.02   # 눌림목 2차 트레일 2%
+PULLBACK_TRAIL_ACTIVATE = 0.025  # 트레일 발동선: +2.5% 이상 올랐을 때만 트레일 시작
 
 # 펌핑 틱 추적 파라미터 (Phase 01 — 틱 기록 인프라)
 PUMP_TRACK_SEC       = 600    # 펌핑 틱 추적 지속시간 10분 (D-05)
@@ -163,6 +166,8 @@ LOSS_COINS_FILE = Path("data/loss_coins.json")
 _outcome_queue: queue.Queue = queue.Queue()
 _pump_cooldown: dict[str, float] = {}  # coin → last logged timestamp
 PUMP_COOLDOWN_SEC = 300  # 같은 코인 5분 내 재감지 무시
+PUMP_ENTRY_BLOCK_SEC = 600             # 15x 감지 후 진입 차단 시간 (10분)
+_pump_entry_blocked: dict[str, float] = {}  # coin → block_until epoch
 
 # ── 눌림목 대기 큐 ─────────────────────────────────────────────────────────────
 _pullback_queue:    queue.Queue    = queue.Queue()  # 대기 코인 등록
@@ -1255,7 +1260,14 @@ def run():
                     if current > highest:
                         highest = current
 
-                    trail_stop   = highest * (1 - trail)
+                    # 눌림목 포지션: 발동선(+2.5%) 미만이면 트레일 미적용 → 손절선 유지
+                    if pos.get("entry_type") == "pullback" and phase == 1:
+                        if highest < entry * (1 + PULLBACK_TRAIL_ACTIVATE):
+                            trail_stop = entry * (1 + INITIAL_STOP_PCT)
+                        else:
+                            trail_stop = highest * (1 - trail)
+                    else:
+                        trail_stop = highest * (1 - trail)
                     pnl_pct      = (current - entry) / entry
                     try:
                         entered_ts = datetime.fromisoformat(str(pos["entered_at"])).timestamp()
@@ -1409,7 +1421,8 @@ def run():
                                 f"절반 매도 완료 | 나머지 트레일 {TIGHT_TRAIL*100:.1f}%로 추적 중"
                             )
                         phase    = 2
-                        trail    = TIGHT_TRAIL
+                        trail    = (PULLBACK_TIGHT_TRAIL if pos.get("entry_type") == "pullback"
+                                    else TIGHT_TRAIL)
                         highest  = current
                         save_active(pos, highest, phase, sold_vol, recv_krw, trail)
                         log.info(f"[{coin}] 2단계 진입 - 트레일 {trail*100:.1f}%로 조임")
@@ -1536,7 +1549,7 @@ def run():
                             phase    = 1
                             sold_vol = 0.0
                             recv_krw = 0.0
-                            trail    = TRAIL_PCT
+                            trail    = PULLBACK_TRAIL_PCT  # 눌림목 전용 3% 트레일
                             daily_trades += 1
                             save_active(pos, highest, phase, sold_vol, recv_krw, trail)
                             try:
@@ -1757,10 +1770,28 @@ def run():
             else:
                 _pid = None
 
-            # RSI 필터: 과열(>85) 또는 침체(<45) 구간 차단
+            # ── 코인별 전략 분기 플래그 (필터보다 먼저 설정) ─────────────────
+            is_immediate = coin in IMMEDIATE_ENTRY_COINS
+
+            # 펌프사후 진입 차단: 15x 이상 감지된 코인 10분간 재진입 금지
+            _block_until = _pump_entry_blocked.get(coin, 0)
+            if time.time() < _block_until:
+                _rem = int(_block_until - time.time())
+                log.info(f"[{coin}] 펌프사후 진입 차단 ({_rem}초 잔여) - 스킵")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason=f"펌프사후차단({_rem}s)", signal_price=best["price"])
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
+
+            # RSI 필터: IMMEDIATE=45~90, 일반=45~80 (DB: RSI>80 구간 승률 24%)
             _rsi = _indic.get("rsi")
-            if _rsi is not None and (_rsi < 45 or _rsi > 90):
-                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~90) - 진입 취소")
+            _rsi_max = 90 if is_immediate else 80
+            if _rsi is not None and (_rsi < 45 or _rsi > _rsi_max):
+                log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~{_rsi_max}) - 진입 취소")
                 try:
                     sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
@@ -1771,24 +1802,26 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # MACD 필터: 하락 추세 구간 차단 (None이면 데이터 부족 → 통과)
-            _macd = _indic.get("macd_bull")
-            if _macd is not None and not _macd:
-                log.info(f"[{coin}] MACD 하락 - 진입 취소")
-                try:
-                    sid = log_signal(coin, datetime.now(), "skipped",
-                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="MACD하락", signal_price=best["price"], **_indic)
-                    queue_outcome(sid, coin, best["price"])
-                except Exception:
-                    pass
-                time.sleep(SCAN_SEC)
-                continue
+            # MACD 필터: 일반 코인만 적용 (IMMEDIATE는 35분 후행 → 빠른 펌핑 신호 차단 문제)
+            if not is_immediate:
+                _macd = _indic.get("macd_bull")
+                if _macd is not None and not _macd:
+                    log.info(f"[{coin}] MACD 하락 - 진입 취소")
+                    try:
+                        sid = log_signal(coin, datetime.now(), "skipped",
+                                   best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                                   skip_reason="MACD하락", signal_price=best["price"], **_indic)
+                        queue_outcome(sid, coin, best["price"])
+                    except Exception:
+                        pass
+                    time.sleep(SCAN_SEC)
+                    continue
 
-            # BB%B 필터: 볼린저밴드 과도 돌파(>1.1) 차단 - 극도 과열, 되돌림 위험
+            # BB%B 필터: IMMEDIATE=1.7, 일반=1.3 (DB: BB>1.3 평균 -2.9%)
             _bb = _indic.get("bb_pct")
-            if _bb is not None and _bb > 1.7:
-                log.info(f"[{coin}] BB%B {_bb:.2f} > 1.7 과열 - 진입 취소")
+            _bb_max = 1.7 if is_immediate else 1.3
+            if _bb is not None and _bb > _bb_max:
+                log.info(f"[{coin}] BB%B {_bb:.2f} > {_bb_max} 과열 - 진입 취소")
                 try:
                     sid = log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
@@ -1799,18 +1832,21 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # 거래량 상한 필터: 15배 초과는 펌프덤프 특징: 15배 초과는 펌프덤프 특징
-            if best["vol_mult"] > 15.0:
-                log.info(f"[{coin}] 거래량 {best['vol_mult']:.1f}x > 15x 펌프덤프 의심 - 진입 취소")
-                try:
-                    sid = log_signal(coin, datetime.now(), "skipped",
-                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason=f"거래량과다({best['vol_mult']:.0f}x)", signal_price=best["price"], **_indic)
-                    queue_outcome(sid, coin, best["price"])
-                except Exception:
-                    pass
-                time.sleep(SCAN_SEC)
-                continue
+            # 거래량 상한 필터: 일반 코인만 (IMMEDIATE는 강한 수급 = 신호 강도)
+            if not is_immediate:
+                if best["vol_mult"] > 15.0:
+                    log.info(f"[{coin}] 거래량 {best['vol_mult']:.1f}x > 15x 펌프덤프 의심 - 진입 취소")
+                    _pump_entry_blocked[coin] = time.time() + PUMP_ENTRY_BLOCK_SEC
+                    log.info(f"[{coin}] 펌프 감지 → {PUMP_ENTRY_BLOCK_SEC//60}분간 진입 차단 등록")
+                    try:
+                        sid = log_signal(coin, datetime.now(), "skipped",
+                                   best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                                   skip_reason=f"거래량과다({best['vol_mult']:.0f}x)", signal_price=best["price"], **_indic)
+                        queue_outcome(sid, coin, best["price"])
+                    except Exception:
+                        pass
+                    time.sleep(SCAN_SEC)
+                    continue
 
             if not check_orderbook(client, coin):
                 log.info(f"[{coin}] 호가 불균형 미달 - 진입 취소")
@@ -1823,22 +1859,25 @@ def run():
                     pass
                 time.sleep(SCAN_SEC)
                 continue
-            if not check_tick_ratio(client, coin, tracker):
-                log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
-                try:
-                    sid = log_signal(coin, datetime.now(), "skipped",
-                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
-                               skip_reason="체결강도미달", signal_price=best["price"], **_indic)
-                    queue_outcome(sid, coin, best["price"])
-                except Exception:
-                    pass
-                time.sleep(SCAN_SEC)
-                continue
+
+            # 체결강도 필터: 일반 코인만 (IMMEDIATE는 24시간 누적 기준 왜곡 가능)
+            if not is_immediate:
+                if not check_tick_ratio(client, coin, tracker):
+                    log.info(f"[{coin}] 체결강도 미달 - 진입 취소")
+                    try:
+                        sid = log_signal(coin, datetime.now(), "skipped",
+                                   best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                                   skip_reason="체결강도미달", signal_price=best["price"], **_indic)
+                        queue_outcome(sid, coin, best["price"])
+                    except Exception:
+                        pass
+                    time.sleep(SCAN_SEC)
+                    continue
 
             # ── 코인별 전략 분기 ─────────────────────────────────────────
             # IMMEDIATE_ENTRY_COINS: 즉시 진입 (눌림목 대기 스킵)
             # 나머지: PULLBACK_ENABLED=True면 눌림목 대기
-            if PULLBACK_ENABLED and coin not in IMMEDIATE_ENTRY_COINS:
+            if PULLBACK_ENABLED and not is_immediate:
                 try:
                     log_signal(coin, datetime.now(), "skipped",
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
