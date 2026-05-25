@@ -51,7 +51,10 @@ _ensure_single_instance()
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import init_db, log_trade, log_signal, update_signal_outcome, log_pump, update_pump_path, log_tick, DB_PATH
+from bithumb.db import (init_db, log_trade, log_signal, update_signal_outcome,
+                        log_pump, update_pump_path, log_tick, DB_PATH,
+                        log_oversold_watch, update_oversold_entry,
+                        mark_oversold_entered, update_oversold_outcome)
 from bithumb.indicators import snapshot as indicator_snapshot, is_ema_bouncing
 from bithumb import notify
 
@@ -173,6 +176,9 @@ _oversold_scan_ts: float       = 0.0             # 마지막 스캔 시각
 _oversold_rsi_state: dict[str, str] = {}         # coin → "idle" | "watching"
 _oversold_cross_count: dict[str, int] = {}       # coin → RSI≥30 연속 횟수 (2회 확인 후 진입)
 OVERSOLD_VOL_RATIO   = 1.5                       # 반등 캔들 거래량이 직전 10캔들 평균의 1.5배 이상
+_oversold_pump_pct: dict[str, float] = {}        # coin → 24h 상승률 (스캔 시 저장)
+_oversold_watch_ids: dict[str, int] = {}         # coin → oversold_log.id (watching 시작 시 저장)
+_oversold_min_rsi: dict[str, float] = {}         # coin → watching 구간 최저 RSI
 
 STATE_FILE      = Path("data/active_pos.json")
 LOCK_FILE       = Path("data/bot.lock")
@@ -194,7 +200,8 @@ _pullback_cooldown_reg: dict[str, float] = {}       # 중복 등록 방지
 
 def start_outcome_tracker(tracker: "PriceTracker") -> None:
     def _run():
-        pending = []  # [signal_id, coin, signal_price, t5m, t30m, done5, done30]
+        # item: [signal_id, coin, sig_price, t5m, t30m, done5, done30, oversold_id|None]
+        pending = []
         while True:
             try:
                 while True:
@@ -205,16 +212,23 @@ def start_outcome_tracker(tracker: "PriceTracker") -> None:
             now = time.time()
             still_pending = []
             for item in pending:
-                sig_id, coin, sig_price, t5m, t30m, done5, done30 = item
+                sig_id, coin, sig_price, t5m, t30m, done5, done30 = item[:7]
+                ov_id = item[7] if len(item) > 7 else None
                 if not done5 and now >= t5m:
                     p = tracker.get_latest_price(coin)
                     if p > 0:
-                        update_signal_outcome(sig_id, outcome_5m=(p - sig_price) / sig_price * 100)
+                        pct = (p - sig_price) / sig_price * 100
+                        update_signal_outcome(sig_id, outcome_5m=pct)
+                        if ov_id:
+                            update_oversold_outcome(ov_id, outcome_5m=pct)
                     item[5] = True
                 if not done30 and now >= t30m:
                     p = tracker.get_latest_price(coin)
                     if p > 0:
-                        update_signal_outcome(sig_id, outcome_30m=(p - sig_price) / sig_price * 100)
+                        pct = (p - sig_price) / sig_price * 100
+                        update_signal_outcome(sig_id, outcome_30m=pct)
+                        if ov_id:
+                            update_oversold_outcome(ov_id, outcome_30m=pct)
                     item[6] = True
                 if not item[6]:
                     still_pending.append(item)
@@ -224,14 +238,17 @@ def start_outcome_tracker(tracker: "PriceTracker") -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
-def queue_outcome(signal_id: int, coin: str, signal_price: float) -> None:
+def queue_outcome(signal_id: int, coin: str, signal_price: float,
+                  oversold_id: int | None = None) -> None:
     if signal_id and signal_price > 0:
         now = time.time()
-        _outcome_queue.put([signal_id, coin, signal_price, now + 300, now + 1800, False, False])
+        _outcome_queue.put([signal_id, coin, signal_price,
+                            now + 300, now + 1800, False, False, oversold_id])
 
 
 def scan_oversold_candidates(client) -> set[str]:
     """24h +30% 이상 펌핑 코인 심볼 반환. 과매도 반등 전략 후보 풀."""
+    global _oversold_pump_pct
     try:
         tickers = client.get_ticker("ALL")
         result = set()
@@ -243,6 +260,7 @@ def scan_oversold_candidates(client) -> set[str]:
             rate = float(data.get("fluctate_rate_24H", 0))
             if rate >= OVERSOLD_PUMP_MIN:
                 result.add(coin)
+                _oversold_pump_pct[coin] = rate
         return result
     except Exception as e:
         log.warning(f"[OVERSOLD] 스캔 실패: {e}")
@@ -263,6 +281,8 @@ def start_oversold_monitor(client) -> None:
                 if c not in _oversold_candidates:
                     del _oversold_rsi_state[c]
                     _oversold_cross_count.pop(c, None)
+                    _oversold_watch_ids.pop(c, None)
+                    _oversold_min_rsi.pop(c, None)
 
             for coin in candidates:
                 try:
@@ -276,9 +296,22 @@ def start_oversold_monitor(client) -> None:
 
                     if state == "idle" and rsi < 25:
                         _oversold_rsi_state[coin] = "watching"
+                        _oversold_min_rsi[coin] = rsi
                         log.info(f"[OVERSOLD] {coin} RSI={rsi:.1f} < 25 → 반등 대기")
+                        try:
+                            oid = log_oversold_watch(
+                                coin, datetime.now(), rsi,
+                                _oversold_pump_pct.get(coin),
+                            )
+                            _oversold_watch_ids[coin] = oid
+                        except Exception as _e:
+                            log.debug(f"[OVERSOLD] DB 기록 실패: {_e}")
 
                     elif state == "watching":
+                        # 최저 RSI 갱신 (watching 구간 전체 추적)
+                        if rsi < _oversold_min_rsi.get(coin, rsi):
+                            _oversold_min_rsi[coin] = rsi
+
                         if rsi >= 30:
                             # 2캔들 연속 RSI≥30 확인 후 진입 (페이크 크로스 방지)
                             _oversold_cross_count[coin] = _oversold_cross_count.get(coin, 0) + 1
@@ -298,22 +331,35 @@ def start_oversold_monitor(client) -> None:
                                 vol_ok  = avg_vol == 0 or cur_vol >= avg_vol * OVERSOLD_VOL_RATIO
                                 if macd_ok and ema_ok and vol_ok:
                                     current = float(candles[0]["trade_price"])
+                                    vol_r   = cur_vol / avg_vol if avg_vol > 0 else 0.0
                                     log.warning(
                                         f"[OVERSOLD] {coin} RSI={rsi:.1f} "
-                                        f"2캔들확인 MACD↑ EMA9↑ 거래량{cur_vol/avg_vol:.1f}x → 진입 신호!"
+                                        f"2캔들확인 MACD↑ EMA9↑ 거래량{vol_r:.1f}x → 진입 신호!"
                                     )
+                                    try:
+                                        _oid = _oversold_watch_ids.get(coin)
+                                        if _oid:
+                                            update_oversold_entry(
+                                                _oid, datetime.now(), rsi, current,
+                                                vol_r, _oversold_min_rsi.get(coin),
+                                            )
+                                    except Exception as _e:
+                                        log.debug(f"[OVERSOLD] DB 업데이트 실패: {_e}")
                                     notify.send(
                                         f"🌊 [과매도 반등] {coin}\n"
-                                        f"RSI={rsi:.1f} MACD↑ EMA9↑ 거래량{cur_vol/avg_vol:.1f}x → 진입 시도 중..."
+                                        f"RSI={rsi:.1f} MACD↑ EMA9↑ 거래량{vol_r:.1f}x → 진입 시도 중..."
                                     )
                                     _entry_ready.put({
                                         "coin": coin,
                                         "price": current,
                                         "ts": time.time(),
                                         "type": "oversold",
+                                        "oversold_id": _oversold_watch_ids.get(coin),
                                     })
                                     _oversold_rsi_state[coin] = "idle"
                                     _oversold_cross_count.pop(coin, None)
+                                    _oversold_watch_ids.pop(coin, None)
+                                    _oversold_min_rsi.pop(coin, None)
                                 else:
                                     log.debug(
                                         f"[OVERSOLD] {coin} RSI={rsi:.1f}≥30 "
@@ -1661,6 +1707,7 @@ def run():
                 pb_price    = pb_signal["price"]
                 _entry_type = pb_signal.get("type", "pullback")
                 _label      = "과매도반등" if _entry_type == "oversold" else "눌림목"
+                _ov_id      = pb_signal.get("oversold_id")
                 # 낡은 신호 버림 (30초 이상 경과)
                 if time.time() - pb_signal.get("ts", 0) > 30:
                     log.info(f"[{_label}] {pb_coin} 신호 만료(30초) - 버림")
@@ -1696,8 +1743,13 @@ def run():
                             daily_trades += 1
                             save_active(pos, highest, phase, sold_vol, recv_krw, trail)
                             try:
-                                log_signal(pb_coin, pos["entered_at"], _entry_type,
-                                           0.0, 0.0, strict_mode)
+                                _sig_id = log_signal(pb_coin, pos["entered_at"], _entry_type,
+                                                     0.0, 0.0, strict_mode,
+                                                     signal_price=pos["entry_price"])
+                                if _entry_type == "oversold" and _ov_id:
+                                    mark_oversold_entered(_ov_id)
+                                queue_outcome(_sig_id, pb_coin, pos["entry_price"],
+                                              oversold_id=_ov_id if _entry_type == "oversold" else None)
                             except Exception:
                                 pass
                             # 같은 코인 중복 신호 큐에서 제거 (다른 코인은 다시 넣기)

@@ -88,6 +88,21 @@ CREATE TABLE IF NOT EXISTS pump_ticks (
     ts_estimated  INTEGER DEFAULT 0        -- exchange_ts가 recv_ts 복사값이면 1 (REC-03)
 );
 CREATE INDEX IF NOT EXISTS idx_pump_ticks_pump_id ON pump_ticks(pump_id);
+CREATE TABLE IF NOT EXISTS oversold_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    coin         TEXT    NOT NULL,
+    detected_at  TEXT    NOT NULL,   -- RSI < 25 최초 감지 시각
+    pump_pct_24h REAL,               -- 감지 시점 24h 상승률
+    min_rsi      REAL,               -- watching 구간 최저 RSI
+    entry_at     TEXT,               -- 진입 신호 발생 시각 (NULL = 미진입)
+    entry_rsi    REAL,               -- 진입 시 RSI
+    entry_price  REAL,               -- 진입 시 현재가
+    vol_ratio    REAL,               -- 반등 캔들 거래량비율 (cur / avg10)
+    entered      INTEGER DEFAULT 0,  -- 실제 매수 여부 (1 = 체결됨)
+    outcome_5m   REAL,               -- 진입 후 +5분 가격변화율 (%)
+    outcome_30m  REAL                -- 진입 후 +30분 가격변화율 (%)
+);
+CREATE INDEX IF NOT EXISTS idx_oversold_log_coin ON oversold_log(coin);
 """
 
 
@@ -271,6 +286,52 @@ def get_trades(days: int = 7) -> list[dict]:
             "SELECT * FROM trades WHERE date >= ? ORDER BY entered_at", (since,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def log_oversold_watch(coin: str, detected_at: datetime,
+                       rsi: float, pump_pct_24h: float | None = None) -> int:
+    ts = detected_at.isoformat() if isinstance(detected_at, datetime) else str(detected_at)
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO oversold_log (coin, detected_at, pump_pct_24h, min_rsi)
+               VALUES (?,?,?,?)""",
+            (coin, ts, pump_pct_24h, rsi),
+        )
+        return cur.lastrowid
+
+
+def update_oversold_entry(oversold_id: int, entry_at: datetime,
+                          entry_rsi: float, entry_price: float,
+                          vol_ratio: float, min_rsi: float | None = None) -> None:
+    ts = entry_at.isoformat() if isinstance(entry_at, datetime) else str(entry_at)
+    with _conn() as con:
+        con.execute(
+            """UPDATE oversold_log
+               SET entry_at=?, entry_rsi=?, entry_price=?, vol_ratio=?,
+                   min_rsi=COALESCE(?,min_rsi)
+               WHERE id=?""",
+            (ts, entry_rsi, entry_price, vol_ratio, min_rsi, oversold_id),
+        )
+
+
+def mark_oversold_entered(oversold_id: int) -> None:
+    with _conn() as con:
+        con.execute("UPDATE oversold_log SET entered=1 WHERE id=?", (oversold_id,))
+
+
+def update_oversold_outcome(oversold_id: int,
+                            outcome_5m: float | None = None,
+                            outcome_30m: float | None = None) -> None:
+    updates, vals = [], []
+    if outcome_5m is not None:
+        updates.append("outcome_5m = ?"); vals.append(outcome_5m)
+    if outcome_30m is not None:
+        updates.append("outcome_30m = ?"); vals.append(outcome_30m)
+    if not updates:
+        return
+    vals.append(oversold_id)
+    with _conn() as con:
+        con.execute(f"UPDATE oversold_log SET {', '.join(updates)} WHERE id=?", vals)
 
 
 def get_stats(days: int = 7) -> dict:
