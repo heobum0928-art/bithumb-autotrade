@@ -157,6 +157,14 @@ STRICT_MULT          = 1.3
 
 SKIP_COINS = {"BTC", "ETH", "XRP", "USDT", "USDC", "BNB", "SOL"}
 
+# ── 과매도 반등 전략 파라미터 ──────────────────────────────────────────────────
+OVERSOLD_SCAN_INTERVAL = 300    # 5분마다 후보 코인 갱신
+OVERSOLD_PUMP_MIN      = 30.0   # 24h 상승률 +30% 이상 코인만 대상
+
+_oversold_candidates: set[str] = set()           # 현재 후보 코인 목록
+_oversold_scan_ts: float       = 0.0             # 마지막 스캔 시각
+_oversold_rsi_state: dict[str, str] = {}         # coin → "idle" | "watching"
+
 STATE_FILE      = Path("data/active_pos.json")
 LOCK_FILE       = Path("data/bot.lock")
 LOSS_COINS_FILE = Path("data/loss_coins.json")
@@ -211,6 +219,91 @@ def queue_outcome(signal_id: int, coin: str, signal_price: float) -> None:
     if signal_id and signal_price > 0:
         now = time.time()
         _outcome_queue.put([signal_id, coin, signal_price, now + 300, now + 1800, False, False])
+
+
+def scan_oversold_candidates(client) -> set[str]:
+    """24h +30% 이상 펌핑 코인 심볼 반환. 과매도 반등 전략 후보 풀."""
+    try:
+        tickers = client.get_ticker("ALL")
+        result = set()
+        for coin, data in tickers.items():
+            if coin == "date":
+                continue
+            if coin in SKIP_COINS or coin in COIN_BLACKLIST:
+                continue
+            rate = float(data.get("fluctate_rate_24H", 0))
+            if rate >= OVERSOLD_PUMP_MIN:
+                result.add(coin)
+        return result
+    except Exception as e:
+        log.warning(f"[OVERSOLD] 스캔 실패: {e}")
+        return set()
+
+
+def start_oversold_monitor(client) -> None:
+    """과매도 반등 모니터: _oversold_candidates 코인 RSI 추적.
+    RSI < 25 → 반등 대기, RSI ≥ 30 + MACD↑ + EMA9↑ → _entry_ready 전송."""
+    from bithumb.indicators import calc_rsi, calc_macd_bull, is_ema_bouncing as _ema_bounce
+
+    def _run():
+        while True:
+            candidates = list(_oversold_candidates)
+
+            # 후보에서 제외된 코인 상태 초기화
+            for c in list(_oversold_rsi_state.keys()):
+                if c not in _oversold_candidates:
+                    del _oversold_rsi_state[c]
+
+            for coin in candidates:
+                try:
+                    candles = client.get_candles(f"KRW-{coin}", unit=1, count=35)
+                    rsi = calc_rsi(candles)
+                    if rsi is None:
+                        time.sleep(1)
+                        continue
+
+                    state = _oversold_rsi_state.get(coin, "idle")
+
+                    if state == "idle" and rsi < 25:
+                        _oversold_rsi_state[coin] = "watching"
+                        log.info(f"[OVERSOLD] {coin} RSI={rsi:.1f} < 25 → 반등 대기")
+
+                    elif state == "watching":
+                        if rsi >= 30:
+                            macd_ok = calc_macd_bull(candles)
+                            ema_ok  = _ema_bounce(candles)
+                            if macd_ok and ema_ok:
+                                current = float(candles[0]["trade_price"])
+                                log.warning(
+                                    f"[OVERSOLD] {coin} RSI={rsi:.1f} MACD↑ EMA9↑ → 진입 신호!"
+                                )
+                                notify.send(
+                                    f"🌊 [과매도 반등] {coin}\n"
+                                    f"RSI={rsi:.1f} MACD↑ EMA9↑ → 진입 시도 중..."
+                                )
+                                _entry_ready.put({
+                                    "coin": coin,
+                                    "price": current,
+                                    "ts": time.time(),
+                                    "type": "oversold",
+                                })
+                                _oversold_rsi_state[coin] = "idle"
+                            else:
+                                log.debug(
+                                    f"[OVERSOLD] {coin} RSI={rsi:.1f}≥30 "
+                                    f"MACD={macd_ok} EMA={ema_ok} 조건 미충족"
+                                )
+                        else:
+                            log.debug(f"[OVERSOLD] {coin} RSI={rsi:.1f} (watching 중)")
+
+                except Exception as e:
+                    log.debug(f"[OVERSOLD] {coin} 체크 실패: {e}")
+
+                time.sleep(1)  # 코인 간 1초 간격 (API 부하 분산)
+
+            time.sleep(30)  # 전체 순회 후 30초 대기
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ── 펌핑 경로 추적기 (눌림목 파라미터 도출용 데이터 수집) ──────────────────────
@@ -1095,6 +1188,7 @@ def run():
     start_outcome_tracker(tracker)
     start_pump_tracker(tracker)
     start_pullback_tracker(tracker, client)
+    start_oversold_monitor(client)
 
     log.info("=== ALT 모멘텀 봇 시작 [논블로킹 단일루프] ===")
     log.info(
@@ -1190,6 +1284,13 @@ def run():
             if now_dt.hour == 7 and last_report_date != today:
                 send_daily_report(today - timedelta(days=1))
                 last_report_date = today
+
+            # ── 과매도 반등 후보 갱신 (5분마다) ──────────────────────────────
+            global _oversold_candidates, _oversold_scan_ts
+            if time.time() - _oversold_scan_ts > OVERSOLD_SCAN_INTERVAL:
+                _oversold_candidates = scan_oversold_candidates(client)
+                log.info(f"[OVERSOLD] 후보 {len(_oversold_candidates)}개: {sorted(_oversold_candidates)}")
+                _oversold_scan_ts = time.time()
 
             # ── 일일 손실 한도 ───────────────────────────────────────────────
             if capital > 0 and daily_pnl / capital <= daily_limit:
@@ -1513,14 +1614,16 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # 눌림목 달성 신호 처리
+            # 눌림목/과매도반등 신호 처리
             try:
-                pb_signal = _entry_ready.get_nowait()
-                pb_coin   = pb_signal["coin"]
-                pb_price  = pb_signal["price"]
+                pb_signal   = _entry_ready.get_nowait()
+                pb_coin     = pb_signal["coin"]
+                pb_price    = pb_signal["price"]
+                _entry_type = pb_signal.get("type", "pullback")
+                _label      = "과매도반등" if _entry_type == "oversold" else "눌림목"
                 # 낡은 신호 버림 (30초 이상 경과)
                 if time.time() - pb_signal.get("ts", 0) > 30:
-                    log.info(f"[눌림목] {pb_coin} 신호 만료(30초) - 버림")
+                    log.info(f"[{_label}] {pb_coin} 신호 만료(30초) - 버림")
                     pb_signal = None
                 # loss_coins 만료 여부 직접 확인
                 _lc = loss_coins.get(pb_coin, {})
@@ -1529,8 +1632,8 @@ def run():
                         and daily_trades < MAX_DAILY_TRADES):
                     max_price = pb_price * 1.005  # 슬리피지 상한 0.5%
                     log.warning(
-                        f"*** [눌림목 진입] {pb_coin} | "
-                        f"눌림가={pb_price:,.3f}원 | 상한={max_price:,.3f}원 | "
+                        f"*** [{_label} 진입] {pb_coin} | "
+                        f"진입가={pb_price:,.3f}원 | 상한={max_price:,.3f}원 | "
                         f"{PULLBACK_ENTRY_KRW:,}원 ***"
                     )
                     avail   = get_available_krw(client)
@@ -1539,21 +1642,21 @@ def run():
                         new_pos = do_buy_limit(client, pb_coin, buy_krw, max_price)
                         if new_pos:
                             notify.send(
-                                f"🚀 [눌림목 진입] {pb_coin}\n"
+                                f"🚀 [{_label} 진입] {pb_coin}\n"
                                 f"체결가={new_pos['entry_price']:,.3f}원 | "
                                 f"진입금={PULLBACK_ENTRY_KRW:,}원"
                             )
-                            new_pos["entry_type"] = "pullback"
+                            new_pos["entry_type"] = _entry_type
                             pos      = new_pos
                             highest  = float(pos["entry_price"])
                             phase    = 1
                             sold_vol = 0.0
                             recv_krw = 0.0
-                            trail    = PULLBACK_TRAIL_PCT  # 눌림목 전용 3% 트레일
+                            trail    = PULLBACK_TRAIL_PCT  # 3% 트레일 (눌림목/과매도 공통)
                             daily_trades += 1
                             save_active(pos, highest, phase, sold_vol, recv_krw, trail)
                             try:
-                                log_signal(pb_coin, pos["entered_at"], "pullback",
+                                log_signal(pb_coin, pos["entered_at"], _entry_type,
                                            0.0, 0.0, strict_mode)
                             except Exception:
                                 pass
