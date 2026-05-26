@@ -101,7 +101,7 @@ BTC_DROP_LIMIT       = -0.015
 OB_BID_RATIO         = 0.0   # 비활성화: 펌핑 시 구조적으로 bid<ask → 1.5 기준은 모든 신호 차단
 TICK_BUY_RATIO       = 0.60
 # 시간대 필터 (KST): 반등률 0~15% 구간 진입 금지
-DEAD_HOURS_KST: set[int] = {6, 7, 11, 12, 13, 14, 15}  # 데이터: 이 시간대 반등률 0~15%
+DEAD_HOURS_KST: set[int] = {6, 7, 11, 12, 13, 14, 15, 18}  # 데이터: 이 시간대 반등률 0~15% | 18시 추가: 실거래 11연패, signal avg -5.08%
 
 # 실거래 손실 또는 pump_log 반등 0% 확인 코인 — 진입 금지
 # (제거: SUNDOG+11,472원, PUFFER+7,147원, DAO+14,096원, XION+13,483원 — 실거래 이익 확인)
@@ -1982,9 +1982,9 @@ def run():
                 time.sleep(SCAN_SEC)
                 continue
 
-            # RSI 필터: IMMEDIATE=45~90, 일반=45~80 (DB: RSI>80 구간 승률 24%)
+            # RSI 필터: 45~75 (DB: RSI 90+ win5m 21%/급락율79%, RSI 60~75이 최적 43%)
             _rsi = _indic.get("rsi")
-            _rsi_max = 90 if is_immediate else 80
+            _rsi_max = 75
             if _rsi is not None and (_rsi < 45 or _rsi > _rsi_max):
                 log.info(f"[{coin}] RSI {_rsi:.1f} 범위 외 (45~{_rsi_max}) - 진입 취소")
                 try:
