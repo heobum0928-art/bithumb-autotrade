@@ -96,6 +96,53 @@ def run() -> None:
     cur.execute("SELECT COUNT(*), SUM(CASE WHEN pnl_krw>0 THEN 1 ELSE 0 END), ROUND(SUM(pnl_krw),0) FROM trades")
     all_stat = cur.fetchone()
 
+    # ── 8. 패턴 분석 (누적 전체 pump_log 기반) ───────────────────────
+
+    # pump_pct 구간별 WIN율 (peak≥100s 기준)
+    cur.execute("""
+        SELECT ROUND(pump_pct, 0) as pct,
+               COUNT(*) as total,
+               SUM(CASE WHEN peak_at_sec >= 100 THEN 1 ELSE 0 END) as win,
+               ROUND(AVG(CASE WHEN peak_at_sec >= 100 THEN 1.0 ELSE 0.0 END)*100, 0) as wr
+        FROM pump_log
+        WHERE peak_at_sec IS NOT NULL AND peak_at_sec > 0
+          AND pump_pct BETWEEN 3 AND 12
+        GROUP BY pct HAVING total >= 5
+        ORDER BY pct
+    """)
+    pump_pct_dist = cur.fetchall()
+
+    # 시간대별 WIN율 (건수 5건 이상만)
+    cur.execute("""
+        SELECT CAST(strftime('%H', detected_at, 'localtime') AS INTEGER) as hr,
+               COUNT(*) as total,
+               ROUND(AVG(CASE WHEN peak_at_sec >= 100 THEN 1.0 ELSE 0.0 END)*100, 0) as wr
+        FROM pump_log
+        WHERE peak_at_sec IS NOT NULL AND peak_at_sec > 0
+        GROUP BY hr HAVING total >= 5
+        ORDER BY hr
+    """)
+    hour_dist = cur.fetchall()
+
+    # signal_log outcome_5m 기반 RSI 구간별 수익률
+    cur.execute("""
+        SELECT CASE
+                 WHEN rsi < 50 THEN '<50'
+                 WHEN rsi < 60 THEN '50~60'
+                 WHEN rsi < 70 THEN '60~70'
+                 WHEN rsi < 80 THEN '70~80'
+                 ELSE '80+'
+               END as rsi_bucket,
+               COUNT(*) as total,
+               ROUND(AVG(outcome_5m), 2) as avg5m,
+               SUM(CASE WHEN outcome_5m > 0 THEN 1 ELSE 0 END) as pos
+        FROM signal_log
+        WHERE outcome_5m IS NOT NULL AND rsi IS NOT NULL
+        GROUP BY rsi_bucket HAVING total >= 10
+        ORDER BY MIN(rsi)
+    """)
+    rsi_dist = cur.fetchall()
+
     con.close()
 
     # ── 마크다운 생성 ─────────────────────────────────────────────────
@@ -196,6 +243,49 @@ def run() -> None:
     lines.append(f"- 과매도 반등: RSI<25 watching → RSI≥30×2캔들 + MACD↑ + 거래량1.5x → 진입")
     lines.append(f"- 즉시진입: META, WNCG")
     lines.append(f"")
+
+    # ── 패턴 분석 (누적 데이터 기반) ────────────────────────────────
+    lines.append(f"## 패턴 분석 (누적 pump_log 전체 기반)")
+    lines.append(f"")
+
+    # pump_pct vs WIN율
+    lines.append(f"### 펌프 강도(pump_pct) vs WIN율")
+    lines.append(f"")
+    lines.append(f"| pump_pct | 건수 | WIN(peak≥100s) | WIN율 |")
+    lines.append(f"|----------|------|----------------|-------|")
+    for r in pump_pct_dist:
+        marker = " ★" if r[3] >= 60 else (" ✗" if r[3] <= 25 else "")
+        lines.append(f"| +{r[0]:.0f}% | {r[1]}건 | {r[2]}건 | {r[3]:.0f}%{marker} |")
+    lines.append(f"")
+
+    # 시간대별 WIN율
+    lines.append(f"### 시간대별 WIN율")
+    lines.append(f"")
+    lines.append(f"| 시간 | 건수 | WIN율 | 판정 |")
+    lines.append(f"|------|------|-------|------|")
+    dead = {6, 7, 11, 12, 13, 14, 15, 18}
+    for r in hour_dist:
+        hr, total, wr = r
+        if wr >= 70:
+            verdict = "✅ 좋음"
+        elif wr <= 25:
+            verdict = "❌ 나쁨"
+        else:
+            verdict = "—"
+        blocked = " [차단중]" if hr in dead else ""
+        lines.append(f"| {hr:02d}시{blocked} | {total}건 | {wr:.0f}% | {verdict} |")
+    lines.append(f"")
+
+    # RSI 구간별 outcome_5m
+    if rsi_dist:
+        lines.append(f"### RSI 구간별 신호 후 5m 수익률")
+        lines.append(f"")
+        lines.append(f"| RSI 구간 | 건수 | 평균 5m | 양수비율 |")
+        lines.append(f"|----------|------|---------|----------|")
+        for r in rsi_dist:
+            pos_rate = r[3] / r[1] * 100 if r[1] else 0
+            lines.append(f"| {r[0]} | {r[1]}건 | {r[2]:+.1f}% | {pos_rate:.0f}% |")
+        lines.append(f"")
 
     OUT_FILE.write_text("\n".join(lines), encoding="utf-8")
     print(f"WEEKLY.md 갱신 완료 ({now_kst.strftime('%Y-%m-%d %H:%M')} KST)")
