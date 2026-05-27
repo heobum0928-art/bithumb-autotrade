@@ -82,6 +82,16 @@ def start_bot(name: str, script: Path) -> subprocess.Popen:
     return proc
 
 
+def write_weekly() -> None:
+    try:
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "weekly_summary.py")],
+            cwd=str(ROOT), timeout=30,
+        )
+    except Exception as e:
+        log.warning(f"[weekly_summary] 실패: {e}")
+
+
 def write_session(target_date: str | None = None) -> None:
     try:
         subprocess.run(
@@ -137,8 +147,9 @@ def main() -> None:
     log.info("=== 워치독 시작 ===")
     send_tg("🐕 워치독 시작 — 봇 자동 재시작 감시 중")
 
-    # 시작 시 오늘 세션 로그 생성
+    # 시작 시 오늘 세션 로그 + 주간 요약 생성
     write_session()
+    write_weekly()
     last_date = datetime.now(KST).date()
 
     last_analysis_date: date | None = None
@@ -156,6 +167,7 @@ def main() -> None:
         if today != last_date:
             write_session(last_date.isoformat())  # 전날 최종 기록
             write_session()                        # 오늘 새 파일
+            write_weekly()                         # 7일 롤링 요약 갱신
             last_date = today
             log.info(f"[session] 날짜 변경 → {today} 세션 생성")
 
