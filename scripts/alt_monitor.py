@@ -190,6 +190,7 @@ _outcome_queue: queue.Queue = queue.Queue()
 _pump_cooldown: dict[str, float] = {}  # coin → last logged timestamp
 PUMP_COOLDOWN_SEC = 300  # 같은 코인 5분 내 재감지 무시
 PUMP_ENTRY_BLOCK_SEC = 600             # 15x 감지 후 진입 차단 시간 (10분)
+MIN_PUMP_AGE_SEC  = 100               # 펌프 감지 후 최소 대기 (DB: <100s=LOSE, ≥100s=WIN)
 _pump_entry_blocked: dict[str, float] = {}  # coin → block_until epoch
 
 # ── 눌림목 대기 큐 ─────────────────────────────────────────────────────────────
@@ -1981,6 +1982,19 @@ def run():
                     pass
                 time.sleep(SCAN_SEC)
                 continue
+
+            # peak_at_sec 필터: 펌프 감지 후 최소 100초 지속 확인
+            # DB 분석: peak_at_sec<100s=전패, ≥100s=전승 (STAT/PONKE/META/WNCG/BOBA 5종 공통)
+            # IMMEDIATE_ENTRY_COINS 제외 (즉시진입 전략 유지)
+            if not is_immediate:
+                _pump_start_ts = _pump_cooldown.get(coin, 0)
+                _pump_age_sec  = time.time() - _pump_start_ts if _pump_start_ts > 0 else MIN_PUMP_AGE_SEC
+                if _pump_age_sec < MIN_PUMP_AGE_SEC:
+                    log.info(
+                        f"[{coin}] 펌프 경과 {_pump_age_sec:.0f}s < {MIN_PUMP_AGE_SEC}s — 진입 보류"
+                    )
+                    time.sleep(SCAN_SEC)
+                    continue
 
             # RSI 필터: 45~75 (DB: RSI 90+ win5m 21%/급락율79%, RSI 60~75이 최적 43%)
             _rsi = _indic.get("rsi")
