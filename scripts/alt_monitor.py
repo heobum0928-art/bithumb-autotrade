@@ -111,10 +111,10 @@ COIN_BLACKLIST: set[str] = {
 }
 
 # 즉시진입 코인: 눌림목 대기 없이 신호 발생 시 바로 매수
-# (실거래 검증: META 4건 100% 승률 / WNCG pump_log 강반등 패턴)
+# (실거래 검증: META 4건 100% 승률)
 IMMEDIATE_ENTRY_COINS: set[str] = {
     "META",   # 4건 100% 승률, +1,491원 실거래 검증
-    "WNCG",   # pump_log 강력한 반등 패턴 확인
+    # WNCG 제거 (2026-05-29): 즉시진입 필터 우회로 초기손절 반복, 실거래 근거 부족
 }
 VOLUME_POWER_MIN     = 100.0
 
@@ -1306,29 +1306,54 @@ def run():
         if saved_bal < saved_remaining * 0.01:
             # 잔고 없음 → 재시작 전에 외부청산된 것
             log.warning(f"[복구] {saved_coin} 잔고 없음 - 외부청산으로 처리")
-            ext_recv = float(saved.get("recv_krw", 0))
-            ext_cost = float(saved.get("cost", 0))
-            ext_pnl  = ext_recv - ext_cost
-            ext_pct  = ext_pnl / ext_cost * 100 if ext_cost else 0
-            notify.notify_sell(saved_coin, ext_pnl, ext_pct, "외부청산 (재시작 시 잔고 없음)")
+
+            # 중복 기록 방지: 같은 entered_at 거래가 DB에 이미 있으면 팬텀 손실 방지
+            import sqlite3 as _sqlite3
+            _already_logged = False
             try:
-                cur_price = get_price(client, saved_coin)
-                log_trade(
-                    coin=saved_coin, market=saved["market"],
-                    entry_price=float(saved["entry_price"]),
-                    exit_price=cur_price,
-                    volume=float(saved["volume"]),
-                    cost_krw=ext_cost, received_krw=ext_recv,
-                    exit_reason="외부청산 (재시작 시 잔고 없음)",
-                    entered_at=saved["entered_at"], exited_at=datetime.now(),
+                _dup_con = _sqlite3.connect(str(DB_PATH))
+                _dup_cur = _dup_con.cursor()
+                _dup_cur.execute(
+                    "SELECT id FROM trades WHERE coin=? AND entered_at=? LIMIT 1",
+                    (saved_coin, str(saved.get("entered_at", "")))
                 )
-            except Exception as e:
-                log.error(f"[DB] 외부청산 저장 실패: {e}")
-            clear_active()
-            if ext_pnl < 0:
-                loss_coins = record_loss_coin(
-                    loss_coins, saved_coin, ext_pct, "외부청산 (재시작 시 잔고 없음)")
-                save_loss_coins(loss_coins)
+                _dup_row = _dup_cur.fetchone()
+                _dup_con.close()
+                if _dup_row:
+                    _already_logged = True
+                    log.warning(
+                        f"[복구] {saved_coin} 이미 청산 기록 있음 "
+                        f"(trade_id={_dup_row[0]}) → 팬텀 손실 방지, active_pos 삭제"
+                    )
+            except Exception as _e:
+                log.warning(f"[복구] 중복 체크 오류: {_e}")
+
+            if _already_logged:
+                clear_active()
+            else:
+                ext_recv = float(saved.get("recv_krw", 0))
+                ext_cost = float(saved.get("cost", 0))
+                ext_pnl  = ext_recv - ext_cost
+                ext_pct  = ext_pnl / ext_cost * 100 if ext_cost else 0
+                notify.notify_sell(saved_coin, ext_pnl, ext_pct, "외부청산 (재시작 시 잔고 없음)")
+                try:
+                    cur_price = get_price(client, saved_coin)
+                    log_trade(
+                        coin=saved_coin, market=saved["market"],
+                        entry_price=float(saved["entry_price"]),
+                        exit_price=cur_price,
+                        volume=float(saved["volume"]),
+                        cost_krw=ext_cost, received_krw=ext_recv,
+                        exit_reason="외부청산 (재시작 시 잔고 없음)",
+                        entered_at=saved["entered_at"], exited_at=datetime.now(),
+                    )
+                except Exception as e:
+                    log.error(f"[DB] 외부청산 저장 실패: {e}")
+                clear_active()
+                if ext_pnl < 0:
+                    loss_coins = record_loss_coin(
+                        loss_coins, saved_coin, ext_pct, "외부청산 (재시작 시 잔고 없음)")
+                    save_loss_coins(loss_coins)
         else:
             log.info(f"[복구] 저장된 포지션: {saved_coin} - 모니터링 재개")
             pos      = {k: saved[k] for k in

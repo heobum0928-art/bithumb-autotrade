@@ -51,6 +51,7 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 | PULLBACK_TARGET_PCT | -3.5% | -7% → -3.5% | -7%는 반등률 20%. -3~5%가 반등률 61% 황금구간 |
 | PULLBACK_ENTRY_KRW | 50,000원 | 30,000 → 50,000 | 수수료 고려 최소 수익 확보 |
 | MIN_PUMP_AGE_SEC | **100초** | 신설 (2026-05-27) | 5종 코인 분석: 펌프 100초 이내 진입=전패, 이후=전승 |
+| IMMEDIATE_ENTRY_COINS | **{META}** | META+WNCG → **META만** | 2026-05-29: WNCG 제거 — 즉시진입 필터 우회로 초기손절 반복, 실거래 승률 근거 없음 |
 
 ---
 
@@ -82,10 +83,10 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 
 ### IMMEDIATE_ENTRY_COINS (즉시 진입)
 ```python
-{"META", "WNCG"}
+{"META"}
 ```
 - META: 4건 100% 승률, +1,491원 실거래 검증
-- WNCG: pump_log 강반등 패턴 (+14% 시그널 확인)
+- **WNCG 제거 (2026-05-29)**: 즉시진입 필터 우회(MIN_PUMP_AGE_SEC 스킵)로 고점 직진입 → 초기손절 반복. 실거래 승률 데이터 없음.
 - 나머지: 과매도 반등 전략으로 처리 (PULLBACK_ENABLED=False)
 
 ### DEAD_HOURS_KST (진입 금지 시간대)
