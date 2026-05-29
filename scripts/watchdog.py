@@ -34,8 +34,9 @@ log = logging.getLogger(__name__)
 CHECK_INTERVAL = 30  # 초마다 프로세스 확인
 
 BOTS = {
-    "alt_monitor": ROOT / "scripts" / "alt_monitor.py",
-    "tg_bot":      ROOT / "scripts" / "tg_bot.py",
+    "alt_monitor":     ROOT / "scripts" / "alt_monitor.py",
+    "tg_bot":          ROOT / "scripts" / "tg_bot.py",
+    "claude_screener": ROOT / "scripts" / "claude_screener.py",
 }
 
 
@@ -73,12 +74,20 @@ def kill_existing(name: str) -> None:
 
 def start_bot(name: str, script: Path) -> subprocess.Popen:
     kill_existing(name)
-    time.sleep(1)
+    time.sleep(3)  # 기존 프로세스 완전 종료 + lockfile 정리 대기
+    # lockfile 강제 삭제 (atexit 미실행으로 남은 경우)
+    if name == "alt_monitor":
+        for lf in [ROOT / "data" / "alt_monitor.pid", ROOT / "data" / "bot.lock"]:
+            try:
+                lf.unlink(missing_ok=True)
+            except Exception:
+                pass
     log.info(f"[{name}] 시작")
     proc = subprocess.Popen(
         [sys.executable, str(script)],
         cwd=str(ROOT),
     )
+    time.sleep(5)  # 새 프로세스가 lockfile 쓸 시간 확보
     return proc
 
 

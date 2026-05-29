@@ -31,20 +31,20 @@ def _parse_exchange_ts(date_s: str, time_s: str) -> float | None:
     except (ValueError, TypeError):
         return None
 
-# ── 중복 실행 방지 (PID 락파일) ───────────────────────────────────────────
+# ── 중복 실행 방지 (TCP 소켓 바인딩 — OS 수준 원자적 보장) ─────────────────────
+_singleton_sock = None  # GC 방지용
+
 def _ensure_single_instance() -> None:
-    import psutil
-    lockfile = Path(__file__).parent.parent / "data" / "alt_monitor.pid"
-    if lockfile.exists():
-        try:
-            old_pid = int(lockfile.read_text())
-            if psutil.pid_exists(old_pid):
-                print(f"[ERROR] alt_monitor 이미 실행 중 (PID={old_pid}). 종료합니다.")
-                sys.exit(1)
-        except (ValueError, OSError):
-            pass
-    lockfile.write_text(str(os.getpid()))
-    atexit.register(lambda: lockfile.unlink(missing_ok=True))
+    import socket as _socket
+    global _singleton_sock
+    _singleton_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    _singleton_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 0)
+    try:
+        _singleton_sock.bind(("127.0.0.1", 47219))  # alt_monitor 전용 포트
+    except OSError:
+        print("[ERROR] alt_monitor 이미 실행 중 (포트 47219 사용 중). 종료합니다.")
+        sys.exit(1)
+    atexit.register(_singleton_sock.close)
 
 _ensure_single_instance()
 
@@ -619,17 +619,7 @@ def queue_pump(pump_id: int, coin: str, base_price: float) -> None:
 # ── 프로세스 중복 방지 ─────────────────────────────────────────────────────────
 
 def acquire_lock() -> None:
-    if LOCK_FILE.exists():
-        try:
-            pid = int(LOCK_FILE.read_text().strip())
-            try:
-                os.kill(pid, 0)
-                log.error(f"[LOCK] 봇이 이미 실행 중입니다 (PID {pid}). 종료합니다.")
-                sys.exit(1)
-            except OSError:
-                pass  # 해당 PID 없음 → 오래된 락 파일
-        except ValueError:
-            pass
+    # 소켓 기반 단일 인스턴스로 전환 — bot.lock은 PID 기록 전용 (중복 방지 아님)
     LOCK_FILE.parent.mkdir(exist_ok=True)
     LOCK_FILE.write_text(str(os.getpid()))
     atexit.register(lambda: LOCK_FILE.unlink(missing_ok=True))
