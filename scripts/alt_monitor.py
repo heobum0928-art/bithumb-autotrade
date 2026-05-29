@@ -89,7 +89,7 @@ ALT_ENTRY_RATIO      = 0.05  # 0.10→0.05, 손실 최소화 (50,000원)
 TP_HALF              = 0.03   # 즉시진입 전략 +3% (데이터: 41% 달성)
 TRAIL_PCT            = 0.02   # 트레일 2%
 TIGHT_TRAIL          = 0.015  # 2차 트레일 1.5%
-HOLD_MIN_SEC         = 600    # 진입 후 최소 10분 보유
+HOLD_MIN_SEC         = 120    # 진입 후 최소 2분 보유 (600→120: 10분 대기가 손실 연장 주범)
 INITIAL_STOP_PCT     = -0.03   # 즉시진입 전략 -3% (짧은 손절→휩쏘 방지)
 DAILY_LIMIT_PCT      = -0.05
 MIN_KRW              = 5001
@@ -101,7 +101,7 @@ BTC_DROP_LIMIT       = -0.015
 OB_BID_RATIO         = 0.0   # 비활성화: 펌핑 시 구조적으로 bid<ask → 1.5 기준은 모든 신호 차단
 TICK_BUY_RATIO       = 0.60
 # 시간대 필터 (KST): 반등률 0~15% 구간 진입 금지
-DEAD_HOURS_KST: set[int] = {6, 7, 11, 12, 13, 14, 15, 18}  # 데이터: 이 시간대 반등률 0~15% | 18시 추가: 실거래 11연패, signal avg -5.08%
+DEAD_HOURS_KST: set[int] = {6, 7, 10, 11, 12, 13, 14, 15, 18}  # 10시 추가: 실거래 4건 평균 -9,326원, WIN율 17%
 
 # 실거래 손실 또는 pump_log 반등 0% 확인 코인 — 진입 금지
 # (제거: SUNDOG+11,472원, PUFFER+7,147원, DAO+14,096원, XION+13,483원 — 실거래 이익 확인)
@@ -1620,7 +1620,48 @@ def run():
                         time.sleep(SCAN_SEC)
                         continue
 
-                    # ── 10분 이후: 1차 익절 + 트레일링스탑 ─────────────────
+                    # ── 트레일 구간 진입 후 ───────────────────────────────
+
+                    # 5분 경과 + 수익 없음 → 조기 손절 (일반 진입)
+                    # 데이터: 진입 후 65%가 한번도 안 오름. 5분 보유 0% 승률
+                    if (entry_type == "regular"
+                            and hold_elapsed >= 300
+                            and pnl_pct < 0.0):
+                        reason = f"수익없음 조기청산 {pnl_pct*100:+.1f}% ({hold_min:.0f}분)"
+                        received = do_sell(client, pos, total_vol - sold_vol, reason)
+                        if received is not None:
+                            recv_krw += received
+                        final_pnl     = recv_krw - total_cost
+                        final_pnl_pct = final_pnl / total_cost * 100
+                        log.info(f"[{coin}] 수익없음 조기청산 | PnL={final_pnl:+,.0f}원 ({final_pnl_pct:+.2f}%)")
+                        notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
+                        try:
+                            log_trade(
+                                coin=coin, market=pos["market"],
+                                entry_price=entry, exit_price=current,
+                                volume=total_vol, cost_krw=total_cost,
+                                received_krw=recv_krw, exit_reason=reason,
+                                entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                max_price=highest,
+                            )
+                        except Exception as e:
+                            log.error(f"[DB] 저장 실패: {e}")
+                        clear_active()
+                        daily_pnl += final_pnl
+                        recent_pnls.append(final_pnl)
+                        if final_pnl < 0:
+                            loss_coins = record_loss_coin(
+                                loss_coins, coin, final_pnl_pct, reason)
+                            save_loss_coins(loss_coins)
+                            report_loss(coin, final_pnl, final_pnl_pct,
+                                        int(hold_elapsed), reason, entry_type)
+                        pos = None; highest = 0.0; phase = 1
+                        sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                        cooldown_end = time.time() + COOLDOWN_SEC
+                        time.sleep(SCAN_SEC)
+                        continue
+
+                    # ── 1차 익절 + 트레일링스탑 ──────────────────────────────
                     # 1차 익절
                     if phase == 1 and pnl_pct >= tp_half_pct:
                         received = do_sell(client, pos, half_vol,
