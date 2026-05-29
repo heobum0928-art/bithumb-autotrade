@@ -86,6 +86,45 @@ def _send_tg(text: str) -> None:
 
 # ── 시장 데이터 ───────────────────────────────────────────────────────────────
 
+def _candle_summary(client: BithumbClient, coin: str) -> str:
+    """최근 12개 1분봉을 Claude용 compact 텍스트로 반환."""
+    try:
+        raw = client.get_candles(f"KRW-{coin}", unit=1, count=12)
+        if not raw:
+            return "  (캔들 없음)"
+        candles = list(reversed(raw))  # 오래된→최신 순
+        closes = [c["trade_price"] for c in candles]
+        vols   = [c["candle_acc_trade_volume"] for c in candles]
+        times  = [c["candle_date_time_kst"][11:16] for c in candles]
+
+        # 거래량 추세: 최근 3개 vs 이전 3개
+        v_new = sum(vols[-3:]) / 3
+        v_old = sum(vols[-6:-3]) / 3 if len(vols) >= 6 else v_new
+        if   v_new > v_old * 1.4: vol_trend = "거래량↑↑급증"
+        elif v_new > v_old * 1.1: vol_trend = "거래량↑증가"
+        elif v_new < v_old * 0.6: vol_trend = "거래량↓↓급감"
+        elif v_new < v_old * 0.9: vol_trend = "거래량↓감소"
+        else:                      vol_trend = "거래량→유지"
+
+        # 가격 방향: 최근 3캔들
+        if   closes[-1] > closes[-4] * 1.005: price_dir = "가격↑상승중"
+        elif closes[-1] < closes[-4] * 0.995: price_dir = "가격↓하락중"
+        else:                                  price_dir = "가격→횡보"
+
+        # 마지막 5개 캔들 표시
+        rows = [f"  {t} {c:,.0f}원 {v/1e6:.2f}M"
+                for t, c, v in zip(times[-5:], closes[-5:], vols[-5:])]
+        high12 = max(closes)
+        low12  = min(closes)
+        chg5m  = (closes[-1] - closes[-5]) / closes[-5] * 100 if len(closes) >= 5 else 0
+
+        return (f"  [{price_dir} / {vol_trend}] 5분변화:{chg5m:+.2f}% "
+                f"12분고점:{high12:,.0f} 저점:{low12:,.0f}\n" +
+                "\n".join(rows))
+    except Exception:
+        return "  (캔들 조회 실패)"
+
+
 def get_market_snapshot(client: BithumbClient) -> list[dict]:
     tickers = client.get_ticker("ALL")
     coins = []
@@ -102,7 +141,12 @@ def get_market_snapshot(client: BithumbClient) -> list[dict]:
             "price":   float(data.get("closing_price", 0)),
         })
     coins.sort(key=lambda x: -x["chg_24h"])
-    return coins[:MAX_CANDIDATES]
+    top = coins[:MAX_CANDIDATES]
+
+    # 각 후보 코인 1분봉 캔들 추가
+    for c in top:
+        c["candles"] = _candle_summary(client, c["coin"])
+    return top
 
 
 def get_current_price(client: BithumbClient, coin: str) -> float:
@@ -148,32 +192,46 @@ def get_pump_summary() -> str:
 
 # ── Claude 진입 분석 ──────────────────────────────────────────────────────────
 
+def _fmt_coin(c: dict) -> str:
+    return (f"{c['coin']} | 24h:{c['chg_24h']:+.1f}% | 거래대금:{c['vol_bil']}억 | 현재:{c['price']:,.0f}원\n"
+            f"{c.get('candles', '  (없음)')}")
+
+
 def ask_claude_entry(snapshot: list[dict], recent: list[dict],
                      pump_summary: str) -> dict:
     now_kst = datetime.now(KST).strftime("%H:%M")
-    prompt = f"""빗썸 알트코인 단타 AI 트레이더입니다. 지금 포지션이 없고 진입 기회를 찾고 있습니다.
+    coins_text = "\n\n".join(_fmt_coin(c) for c in snapshot)
+
+    recent_text = "\n".join(
+        f"  {r['coin']} {r['pnl_pct']:+.2f}% ({r['pnl_krw']:+,.0f}원) [{r['exit']}] {r['at']}"
+        for r in recent
+    ) or "  없음"
+
+    prompt = f"""빗썸 알트코인 단타 AI 트레이더. 지금 포지션 없음, 진입 기회 탐색 중.
 
 현재 시각: {now_kst} KST
 
-=== 빗썸 현재 시장 (24h 거래대금 20억+, 상위 {len(snapshot)}개) ===
-{json.dumps(snapshot, ensure_ascii=False, indent=2)}
+=== 후보 코인 실시간 1분봉 ({len(snapshot)}개) ===
+각 코인: 24h변화율 / 거래대금 / 현재가 + 최근 12분봉 요약 (시간 종가 거래량)
 
-=== 오늘 펌핑 이력 ===
+{coins_text}
+
+=== 오늘 펌핑 감지 이력 ===
 {pump_summary}
 
-=== 최근 실거래 결과 ===
-{json.dumps(recent, ensure_ascii=False, indent=2)}
+=== 최근 봇 실거래 ===
+{recent_text}
 
-=== 진입 기준 ===
-- 24h 변화율 +5~40% (과열 +50% 초과 제외, 죽은 코인 0% 이하 제외)
-- 거래대금 클수록 유리 (진입·청산 용이)
-- 오늘 여러 번 펌핑 감지 = 지속 수급
-- 최근 봇 손실 코인 제외
-
-다음 5~30분 내 +3% 이상 급등 가능성 높은 코인 있으면 진입, 없으면 대기.
+=== 판단 기준 ===
+- 24h +5~40% 코인 중 지금 이 순간 추가 상승 모멘텀이 있는 코인 선택
+- 가격↑상승중 + 거래량↑증가 = 진입 적합
+- 가격→횡보 + 거래량↑급증 = 돌파 임박, 진입 고려
+- 고점 근처 + 거래량↓감소 = 모멘텀 소진, 대기
+- 최근 봇 손실 코인, 24h +50% 초과 과열 코인 제외
+- 지금 진입 시 즉시 플러스로 시작할 수 있는 타이밍인지 판단
 
 JSON만 응답:
-{{"action": "buy", "coin": "심볼", "reason": "한 줄"}}
+{{"action": "buy", "coin": "심볼", "reason": "캔들 패턴 기반 한 줄 이유"}}
 또는
 {{"action": "wait", "reason": "한 줄"}}"""
 
@@ -377,7 +435,7 @@ def run() -> None:
                 snapshot = get_market_snapshot(client)
                 recent   = get_recent_trades()
                 pump_s   = get_pump_summary()
-                log.info(f"[분석] 후보 {len(snapshot)}개 | Claude 호출 중...")
+                log.info(f"[분석] 후보 {len(snapshot)}개 (1분봉 포함) | Claude 호출 중...")
 
                 result = ask_claude_entry(snapshot, recent, pump_s)
                 action = result.get("action", "wait")
