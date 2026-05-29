@@ -327,7 +327,16 @@ def start_oversold_monitor(client) -> None:
                         if rsi < _oversold_min_rsi.get(coin, rsi):
                             _oversold_min_rsi[coin] = rsi
 
-                        if rsi >= 30:
+                        if rsi > 50:
+                            # RSI가 이미 과매수 구간까지 올라감 → 반등 기회 지나간 것으로 리셋
+                            # (버그픽스: 5분 스캔 간격 사이에 RSI 17→78 급등 시 과매수 진입 방지)
+                            log.info(f"[OVERSOLD] {coin} RSI={rsi:.1f}>50 — 이미 과반등, watching 리셋")
+                            _oversold_rsi_state[coin] = "idle"
+                            _oversold_cross_count.pop(coin, None)
+                            _oversold_watch_ids.pop(coin, None)
+                            _oversold_min_rsi.pop(coin, None)
+
+                        elif rsi >= 30:
                             # 1캔들 RSI≥30 확인 후 진입 (2캔들→1캔들: 데이터수집 속도 향상)
                             _oversold_cross_count[coin] = _oversold_cross_count.get(coin, 0) + 1
                             cnt = _oversold_cross_count[coin]
