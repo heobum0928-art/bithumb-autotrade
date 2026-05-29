@@ -173,6 +173,20 @@ def get_recent_trades(n: int = 10) -> list[dict]:
         return []
 
 
+def get_today_traded_coins() -> set[str]:
+    """오늘 이미 거래된 코인 목록 (재진입 금지용)."""
+    try:
+        today = datetime.now(KST).date().isoformat()
+        con = sqlite3.connect(str(DB_PATH))
+        cur = con.cursor()
+        cur.execute("SELECT DISTINCT coin FROM trades WHERE entered_at >= ?", (today,))
+        coins = {r[0] for r in cur.fetchall()}
+        con.close()
+        return coins
+    except Exception:
+        return set()
+
+
 def get_pump_summary() -> str:
     try:
         today = datetime.now(KST).date().isoformat()
@@ -198,20 +212,25 @@ def _fmt_coin(c: dict) -> str:
 
 
 def ask_claude_entry(snapshot: list[dict], recent: list[dict],
-                     pump_summary: str) -> dict:
+                     pump_summary: str, skip_coins: set[str] | None = None) -> dict:
     now_kst = datetime.now(KST).strftime("%H:%M")
-    coins_text = "\n\n".join(_fmt_coin(c) for c in snapshot)
+    skip_coins = skip_coins or set()
+    visible = [c for c in snapshot if c["coin"] not in skip_coins]
+    coins_text = "\n\n".join(_fmt_coin(c) for c in visible) or "  (후보 없음)"
 
     recent_text = "\n".join(
         f"  {r['coin']} {r['pnl_pct']:+.2f}% ({r['pnl_krw']:+,.0f}원) [{r['exit']}] {r['at']}"
         for r in recent
     ) or "  없음"
 
+    skip_text = ", ".join(sorted(skip_coins)) if skip_coins else "없음"
+
     prompt = f"""빗썸 알트코인 단타 AI 트레이더. 지금 포지션 없음, 진입 기회 탐색 중.
 
 현재 시각: {now_kst} KST
+오늘 재진입 금지 코인: {skip_text}
 
-=== 후보 코인 실시간 1분봉 ({len(snapshot)}개) ===
+=== 후보 코인 실시간 1분봉 ({len(visible)}개) ===
 각 코인: 24h변화율 / 거래대금 / 현재가 + 최근 12분봉 요약 (시간 종가 거래량)
 
 {coins_text}
@@ -222,16 +241,18 @@ def ask_claude_entry(snapshot: list[dict], recent: list[dict],
 === 최근 봇 실거래 ===
 {recent_text}
 
-=== 판단 기준 ===
-- 24h +5~40% 코인 중 지금 이 순간 추가 상승 모멘텀이 있는 코인 선택
-- 가격↑상승중 + 거래량↑증가 = 진입 적합
-- 가격→횡보 + 거래량↑급증 = 돌파 임박, 진입 고려
-- 고점 근처 + 거래량↓감소 = 모멘텀 소진, 대기
-- 최근 봇 손실 코인, 24h +50% 초과 과열 코인 제외
-- 지금 진입 시 즉시 플러스로 시작할 수 있는 타이밍인지 판단
+=== 진입 기준 (엄격하게 적용) ===
+- 24h +5~40% 코인 중 지금 이 순간 상승 모멘텀이 살아있는 코인만 선택
+- A+ 셋업만 진입: 아래 조건 2개 이상 충족해야 함
+    1) 최근 2캔들 연속 종가 상승 + 거래량 증가
+    2) 5분 변화율 +0.5% 이상 (지금 막 움직이는 중)
+    3) 현재가가 12분 고점 근처 (고점의 99% 이상) = 돌파 직전
+- 조건 불충분하면 반드시 wait — 확신 없으면 대기가 정답
+- 오늘 재진입 금지 코인은 절대 선택 금지
+- 24h +50% 초과 과열, 하락 추세 코인 제외
 
 JSON만 응답:
-{{"action": "buy", "coin": "심볼", "reason": "캔들 패턴 기반 한 줄 이유"}}
+{{"action": "buy", "coin": "심볼", "reason": "충족된 조건 명시한 한 줄"}}
 또는
 {{"action": "wait", "reason": "한 줄"}}"""
 
@@ -432,12 +453,15 @@ def run() -> None:
 
             last_entry_check = loop_start
             try:
-                snapshot = get_market_snapshot(client)
-                recent   = get_recent_trades()
-                pump_s   = get_pump_summary()
+                snapshot    = get_market_snapshot(client)
+                recent      = get_recent_trades()
+                pump_s      = get_pump_summary()
+                skip_coins  = get_today_traded_coins()
+                if skip_coins:
+                    log.info(f"[재진입금지] 오늘 거래 코인: {', '.join(sorted(skip_coins))}")
                 log.info(f"[분석] 후보 {len(snapshot)}개 (1분봉 포함) | Claude 호출 중...")
 
-                result = ask_claude_entry(snapshot, recent, pump_s)
+                result = ask_claude_entry(snapshot, recent, pump_s, skip_coins)
                 action = result.get("action", "wait")
                 coin   = result.get("coin", "").upper()
                 reason = result.get("reason", "")
@@ -454,6 +478,11 @@ def run() -> None:
                         }, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
+
+                if action == "buy" and coin:
+                    if coin in skip_coins:
+                        log.warning(f"[{coin}] 오늘 이미 거래 — 재진입 차단")
+                        action = "wait"
 
                 if action == "buy" and coin:
                     new_pos = do_buy(client, coin, record_only)
