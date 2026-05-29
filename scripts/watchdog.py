@@ -34,9 +34,8 @@ log = logging.getLogger(__name__)
 CHECK_INTERVAL = 30  # 초마다 프로세스 확인
 
 BOTS = {
-    "alt_monitor":     ROOT / "scripts" / "alt_monitor.py",
-    "tg_bot":          ROOT / "scripts" / "tg_bot.py",
-    "claude_screener": ROOT / "scripts" / "claude_screener.py",
+    "alt_monitor": ROOT / "scripts" / "alt_monitor.py",
+    "tg_bot":      ROOT / "scripts" / "tg_bot.py",
 }
 
 

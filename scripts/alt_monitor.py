@@ -103,7 +103,7 @@ TICK_BUY_RATIO       = 0.60
 # 시간대 필터 (KST): 반등률 0~15% 구간 진입 금지
 DEAD_HOURS_KST: set[int] = {6, 7, 10, 11, 12, 13, 14, 15, 18}  # 10시 추가: 실거래 4건 평균 -9,326원, WIN율 17%
 MIN_DAILY_VOLUME_KRW  = 20_000_000_000  # 24h 거래대금 20억+ 코인만 진입 (마이크로 펌프덤프 방어)
-CLAUDE_FILTER_ENABLED = True           # Claude 워치리스트 필터 ON/OFF
+CLAUDE_FILTER_ENABLED = False          # Claude 워치리스트 필터 비활성화
 CLAUDE_WL_PATH        = Path("data/claude_watchlist.json")
 CLAUDE_WL_MAX_AGE_SEC = 600            # 10분 이상 오래된 watchlist는 무시
 
