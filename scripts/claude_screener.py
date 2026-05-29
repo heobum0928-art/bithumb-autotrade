@@ -45,6 +45,7 @@ BE_TRIGGER        = 0.01   # 브레이크이븐 발동 +1%
 FIXED_TP          = 0.03   # 고정 익절 +3%
 HARD_SL           = -0.02  # 손절 -2% (브레이크이븐 미발동 구간)
 
+Path("logs").mkdir(exist_ok=True)  # logs/ 디렉토리 없어도 크래시 방지
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [CS][%(levelname)s] %(message)s",
@@ -97,19 +98,24 @@ def _candle_summary(client: BithumbClient, coin: str) -> str:
         vols   = [c["candle_acc_trade_volume"] for c in candles]
         times  = [c["candle_date_time_kst"][11:16] for c in candles]
 
-        # 거래량 추세: 최근 3개 vs 이전 3개
+        # 거래량 추세: 최근 3개 vs 이전 3개 (v_old=0 방어)
         v_new = sum(vols[-3:]) / 3
         v_old = sum(vols[-6:-3]) / 3 if len(vols) >= 6 else v_new
-        if   v_new > v_old * 1.4: vol_trend = "거래량↑↑급증"
+        if v_old == 0:
+            vol_trend = "거래량→(이전없음)"
+        elif v_new > v_old * 1.4: vol_trend = "거래량↑↑급증"
         elif v_new > v_old * 1.1: vol_trend = "거래량↑증가"
         elif v_new < v_old * 0.6: vol_trend = "거래량↓↓급감"
         elif v_new < v_old * 0.9: vol_trend = "거래량↓감소"
         else:                      vol_trend = "거래량→유지"
 
-        # 가격 방향: 최근 3캔들
-        if   closes[-1] > closes[-4] * 1.005: price_dir = "가격↑상승중"
-        elif closes[-1] < closes[-4] * 0.995: price_dir = "가격↓하락중"
-        else:                                  price_dir = "가격→횡보"
+        # 가격 방향: 캔들 4개 이상일 때만 비교
+        if len(closes) >= 4:
+            if   closes[-1] > closes[-4] * 1.005: price_dir = "가격↑상승중"
+            elif closes[-1] < closes[-4] * 0.995: price_dir = "가격↓하락중"
+            else:                                  price_dir = "가격→횡보"
+        else:
+            price_dir = "가격→(데이터부족)"
 
         # 마지막 5개 캔들 표시
         rows = [f"  {t} {c:,.0f}원 {v/1e6:.2f}M"
@@ -136,9 +142,9 @@ def get_market_snapshot(client: BithumbClient) -> list[dict]:
             continue
         coins.append({
             "coin":    coin,
-            "chg_24h": round(float(data.get("fluctate_rate_24H", 0)), 1),
+            "chg_24h": round(float(data.get("fluctate_rate_24H") or 0), 1),
             "vol_bil": round(vol / 1e8, 1),
-            "price":   float(data.get("closing_price", 0)),
+            "price":   float(data.get("closing_price") or 0),
         })
     coins.sort(key=lambda x: -x["chg_24h"])
     top = coins[:MAX_CANDIDATES]
@@ -183,7 +189,8 @@ def get_today_traded_coins() -> set[str]:
         coins = {r[0] for r in cur.fetchall()}
         con.close()
         return coins
-    except Exception:
+    except Exception as e:
+        log.warning(f"[재진입금지] DB 조회 실패, 차단 목록 없음: {e}")
         return set()
 
 
