@@ -102,7 +102,10 @@ OB_BID_RATIO         = 0.0   # 비활성화: 펌핑 시 구조적으로 bid<ask 
 TICK_BUY_RATIO       = 0.60
 # 시간대 필터 (KST): 반등률 0~15% 구간 진입 금지
 DEAD_HOURS_KST: set[int] = {6, 7, 10, 11, 12, 13, 14, 15, 18}  # 10시 추가: 실거래 4건 평균 -9,326원, WIN율 17%
-MIN_DAILY_VOLUME_KRW = 20_000_000_000  # 24h 거래대금 20억+ 코인만 진입 (마이크로 펌프덤프 방어)
+MIN_DAILY_VOLUME_KRW  = 20_000_000_000  # 24h 거래대금 20억+ 코인만 진입 (마이크로 펌프덤프 방어)
+CLAUDE_FILTER_ENABLED = True           # Claude 워치리스트 필터 ON/OFF
+CLAUDE_WL_PATH        = Path("data/claude_watchlist.json")
+CLAUDE_WL_MAX_AGE_SEC = 600            # 10분 이상 오래된 watchlist는 무시
 
 # 실거래 손실 또는 pump_log 반등 0% 확인 코인 — 진입 금지
 # (제거: SUNDOG+11,472원, PUFFER+7,147원, DAO+14,096원, XION+13,483원 — 실거래 이익 확인)
@@ -2114,6 +2117,26 @@ def run():
                     )
                     time.sleep(SCAN_SEC)
                     continue
+
+            # Claude 워치리스트 필터 (claude_screener.py가 5분마다 갱신)
+            # 파일 없거나 10분 이상 오래됐으면 필터 해제 (fail-safe)
+            if CLAUDE_FILTER_ENABLED and CLAUDE_WL_PATH.exists():
+                try:
+                    _wl_age = time.time() - CLAUDE_WL_PATH.stat().st_mtime
+                    if _wl_age < CLAUDE_WL_MAX_AGE_SEC:
+                        _wl_data  = json.loads(CLAUDE_WL_PATH.read_text(encoding="utf-8"))
+                        _wl_coins = set(_wl_data.get("coins", []))
+                        _av_coins = set(_wl_data.get("avoid", []))
+                        if _av_coins and coin in _av_coins:
+                            log.info(f"[{coin}] Claude 회피 목록 - 진입 취소")
+                            time.sleep(SCAN_SEC)
+                            continue
+                        if _wl_coins and coin not in _wl_coins:
+                            log.info(f"[{coin}] Claude 워치리스트 미포함 ({_wl_coins}) - 스킵")
+                            time.sleep(SCAN_SEC)
+                            continue
+                except Exception:
+                    pass  # 파싱 오류 시 필터 무시
 
             # RSI 필터: 45~75 (DB: RSI 90+ win5m 21%/급락율79%, RSI 60~75이 최적 43%)
             _rsi = _indic.get("rsi")
