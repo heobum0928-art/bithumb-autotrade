@@ -140,6 +140,7 @@ OVERSOLD_SL_PCT         = -0.02  # 손절 -2% (빠른 손절로 손실 최소화
 OVERSOLD_TP_HALF        = 0.10   # 1차 익절 +10% (기존 +5%에서 상향)
 OVERSOLD_TRAIL_PCT      = 0.04   # 트레일 4% (더 여유있게 수익 추구)
 OVERSOLD_TRAIL_ACTIVATE = 0.05   # 트레일 발동 +5% (충분히 오른 뒤에만)
+OVERSOLD_BE_TRIGGER     = 0.01   # 브레이크이븐 발동 +1% (플러스 봤으면 손실 방지)
 
 # 펌핑 틱 추적 파라미터 (Phase 01 — 틱 기록 인프라)
 PUMP_TRACK_SEC       = 600    # 펌핑 틱 추적 지속시간 10분 (D-05)
@@ -1476,10 +1477,12 @@ def run():
                     # 진입 유형별 트레일 발동선 / 손절선 적용
                     _etype = pos.get("entry_type", "regular")
                     if _etype == "oversold" and phase == 1:
-                        if highest < entry * (1 + OVERSOLD_TRAIL_ACTIVATE):
-                            trail_stop = entry * (1 + OVERSOLD_SL_PCT)  # -2% 손절
+                        if highest >= entry * (1 + OVERSOLD_TRAIL_ACTIVATE):
+                            trail_stop = highest * (1 - trail)           # 트레일 발동
+                        elif highest >= entry * (1 + OVERSOLD_BE_TRIGGER):
+                            trail_stop = entry                            # 브레이크이븐: 진입가로 손절선 올림
                         else:
-                            trail_stop = highest * (1 - trail)
+                            trail_stop = entry * (1 + OVERSOLD_SL_PCT)  # 아직 -2% 손절
                     elif _etype == "pullback" and phase == 1:
                         if highest < entry * (1 + PULLBACK_TRAIL_ACTIVATE):
                             trail_stop = entry * (1 + INITIAL_STOP_PCT)  # -3% 손절
