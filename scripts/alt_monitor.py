@@ -102,6 +102,7 @@ OB_BID_RATIO         = 0.0   # 비활성화: 펌핑 시 구조적으로 bid<ask 
 TICK_BUY_RATIO       = 0.60
 # 시간대 필터 (KST): 반등률 0~15% 구간 진입 금지
 DEAD_HOURS_KST: set[int] = {6, 7, 10, 11, 12, 13, 14, 15, 18}  # 10시 추가: 실거래 4건 평균 -9,326원, WIN율 17%
+MIN_DAILY_VOLUME_KRW = 20_000_000_000  # 24h 거래대금 20억+ 코인만 진입 (마이크로 펌프덤프 방어)
 
 # 실거래 손실 또는 pump_log 반등 0% 확인 코인 — 진입 금지
 # (제거: SUNDOG+11,472원, PUFFER+7,147원, DAO+14,096원, XION+13,483원 — 실거래 이익 확인)
@@ -177,6 +178,7 @@ _oversold_rsi_state: dict[str, str] = {}         # coin → "idle" | "watching"
 _oversold_cross_count: dict[str, int] = {}       # coin → RSI≥30 연속 횟수 (2회 확인 후 진입)
 OVERSOLD_VOL_RATIO   = 1.2                       # 반등 캔들 거래량 (1.5→1.2 데이터수집 완화)
 _oversold_pump_pct: dict[str, float] = {}        # coin → 24h 상승률 (스캔 시 저장)
+_volume_whitelist: set[str] = set()              # 24h 20억+ 코인 목록 (scan_oversold_candidates 갱신)
 _oversold_watch_ids: dict[str, int] = {}         # coin → oversold_log.id (watching 시작 시 저장)
 _oversold_min_rsi: dict[str, float] = {}         # coin → watching 구간 최저 RSI
 
@@ -248,11 +250,13 @@ def queue_outcome(signal_id: int, coin: str, signal_price: float,
 
 
 def scan_oversold_candidates(client) -> set[str]:
-    """24h +30% 이상 펌핑 코인 심볼 반환. 과매도 반등 전략 후보 풀."""
+    """24h +30% 이상 펌핑 코인 심볼 반환. 과매도 반등 전략 후보 풀.
+    부산물로 _volume_whitelist(24h 20억+) 갱신."""
     global _oversold_pump_pct
     try:
         tickers = client.get_ticker("ALL")
         result = set()
+        new_whitelist: set[str] = set()
         for coin, data in tickers.items():
             if coin == "date":
                 continue
@@ -262,6 +266,13 @@ def scan_oversold_candidates(client) -> set[str]:
             if rate >= OVERSOLD_PUMP_MIN:
                 result.add(coin)
                 _oversold_pump_pct[coin] = rate
+            vol = float(data.get("acc_trade_value_24H", 0))
+            if vol >= MIN_DAILY_VOLUME_KRW:
+                new_whitelist.add(coin)
+        if new_whitelist:
+            _volume_whitelist.clear()
+            _volume_whitelist.update(new_whitelist)
+            log.info(f"[볼륨필터] 화이트리스트 갱신: {len(_volume_whitelist)}개 코인 (20억+)")
         return result
     except Exception as e:
         log.warning(f"[OVERSOLD] 스캔 실패: {e}")
@@ -1660,8 +1671,52 @@ def run():
                         continue
 
                     # ── 1차 익절 + 트레일링스탑 ──────────────────────────────
-                    # 1차 익절
-                    if phase == 1 and pnl_pct >= tp_half_pct:
+                    # 일반 진입 전량 즉시 익절: +3% 달성 시 바로 전량 매도
+                    if entry_type == "regular" and phase == 1 and pnl_pct >= tp_half_pct:
+                        reason = f"전량익절 {pnl_pct*100:+.1f}%"
+                        received = do_sell(client, pos, total_vol - sold_vol, reason)
+                        if received is not None:
+                            recv_krw += received
+                        final_pnl     = recv_krw - total_cost
+                        final_pnl_pct = final_pnl / total_cost * 100
+                        log.info(f"[{coin}] 청산 | PnL={final_pnl:+,.0f}원 ({final_pnl_pct:+.2f}%)")
+                        notify.notify_sell(coin, final_pnl, final_pnl_pct, reason)
+                        try:
+                            log_trade(
+                                coin=coin, market=pos["market"],
+                                entry_price=entry, exit_price=current,
+                                volume=total_vol, cost_krw=total_cost,
+                                received_krw=recv_krw, exit_reason=reason,
+                                entered_at=pos["entered_at"], exited_at=datetime.now(),
+                                max_price=highest,
+                            )
+                        except Exception as e:
+                            log.error(f"[DB] 저장 실패: {e}")
+                        clear_active()
+                        daily_pnl += final_pnl
+                        recent_pnls.append(final_pnl)
+                        daily_trades += 1
+                        if len(recent_pnls) == STRICT_WINDOW:
+                            losses = sum(1 for p in recent_pnls if p < 0)
+                            if not strict_mode and losses >= STRICT_LOSS_CNT:
+                                strict_mode = True
+                                log.warning(f"[엄격모드 진입] 최근 {STRICT_WINDOW}건 중 {losses}건 손실")
+                                notify.send(
+                                    f"<b>[엄격모드 진입]</b> 최근 {STRICT_WINDOW}건 중 {losses}건 손실\n"
+                                    f"진입 조건 {STRICT_MULT*100-100:.0f}% 강화", force=True)
+                            elif strict_mode and losses < STRICT_LOSS_CNT:
+                                strict_mode = False
+                                log.info(f"[엄격모드 해제] 손실 {losses}건으로 감소")
+                                notify.send("<b>[엄격모드 해제]</b> 승률 회복 - 조건 정상화", force=True)
+                        log.info(f"[ALT] 오늘 누적 PnL: {daily_pnl:+,.0f}원 | 거래:{daily_trades}건")
+                        pos = None; highest = 0.0; phase = 1
+                        sold_vol = 0.0; recv_krw = 0.0; trail = TRAIL_PCT
+                        cooldown_end = time.time() + COOLDOWN_SEC
+                        time.sleep(SCAN_SEC)
+                        continue
+
+                    # 1차 익절 (oversold/pullback/newlisting: 절반 매도 후 트레일링)
+                    elif phase == 1 and pnl_pct >= tp_half_pct:
                         received = do_sell(client, pos, half_vol,
                                            f"1차익절 {pnl_pct*100:+.1f}%")
                         if received is not None:
@@ -2100,6 +2155,18 @@ def run():
                                best["price_chg"] * 100, best["vol_mult"], strict_mode,
                                skip_reason=f"BB과열({_bb:.2f})", signal_price=best["price"], **_indic)
                     queue_outcome(sid, coin, best["price"])
+                except Exception:
+                    pass
+                time.sleep(SCAN_SEC)
+                continue
+
+            # 24h 거래대금 필터: 20억 미만 마이크로 알트 제외 (펌프덤프 방어)
+            if _volume_whitelist and coin not in _volume_whitelist:
+                log.info(f"[{coin}] 24h 거래대금 20억 미만 - 진입 취소")
+                try:
+                    log_signal(coin, datetime.now(), "skipped",
+                               best["price_chg"] * 100, best["vol_mult"], strict_mode,
+                               skip_reason="거래대금부족", signal_price=best["price"])
                 except Exception:
                     pass
                 time.sleep(SCAN_SEC)
