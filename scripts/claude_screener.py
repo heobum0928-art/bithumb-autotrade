@@ -87,12 +87,12 @@ def _send_tg(text: str) -> None:
 
 # ── 시장 데이터 ───────────────────────────────────────────────────────────────
 
-def _candle_summary(client: BithumbClient, coin: str) -> str:
-    """최근 12개 1분봉을 Claude용 compact 텍스트로 반환."""
+def _candle_summary(client: BithumbClient, coin: str) -> tuple[str, float]:
+    """최근 12개 1분봉을 Claude용 compact 텍스트 + 5분변화율로 반환."""
     try:
         raw = client.get_candles(f"KRW-{coin}", unit=1, count=12)
         if not raw:
-            return "  (캔들 없음)"
+            return "  (캔들 없음)", 0.0
         candles = list(reversed(raw))  # 오래된→최신 순
         closes = [c["trade_price"] for c in candles]
         vols   = [c["candle_acc_trade_volume"] for c in candles]
@@ -124,11 +124,12 @@ def _candle_summary(client: BithumbClient, coin: str) -> str:
         low12  = min(closes)
         chg5m  = (closes[-1] - closes[-5]) / closes[-5] * 100 if len(closes) >= 5 else 0
 
-        return (f"  [{price_dir} / {vol_trend}] 5분변화:{chg5m:+.2f}% "
+        text = (f"  [{price_dir} / {vol_trend}] 5분변화:{chg5m:+.2f}% "
                 f"12분고점:{high12:,.0f} 저점:{low12:,.0f}\n" +
                 "\n".join(rows))
+        return text, chg5m
     except Exception:
-        return "  (캔들 조회 실패)"
+        return "  (캔들 조회 실패)", 0.0
 
 
 def get_market_snapshot(client: BithumbClient) -> list[dict]:
@@ -151,7 +152,7 @@ def get_market_snapshot(client: BithumbClient) -> list[dict]:
 
     # 각 후보 코인 1분봉 캔들 추가
     for c in top:
-        c["candles"] = _candle_summary(client, c["coin"])
+        c["candles"], c["chg5m"] = _candle_summary(client, c["coin"])
     return top
 
 
@@ -489,6 +490,14 @@ def run() -> None:
                 if action == "buy" and coin:
                     if coin in skip_coins:
                         log.warning(f"[{coin}] 오늘 이미 거래 — 재진입 차단")
+                        action = "wait"
+
+                if action == "buy" and coin:
+                    # 5분 모멘텀 필터: 지금 실제로 오르고 있는지 확인
+                    coin_data = next((c for c in snapshot if c["coin"] == coin), None)
+                    chg5m = coin_data["chg5m"] if coin_data else 0.0
+                    if chg5m < 0.3:
+                        log.info(f"[{coin}] 5분변화율 {chg5m:+.2f}% < +0.3% — 모멘텀 없음, 차단")
                         action = "wait"
 
                 if action == "buy" and coin:

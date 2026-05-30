@@ -1488,6 +1488,12 @@ def run():
                             trail_stop = entry * (1 + INITIAL_STOP_PCT)  # -3% 손절
                         else:
                             trail_stop = highest * (1 - trail)
+                    elif _etype == "regular":
+                        # regular(신호감지): +1% 찍으면 손절선 진입가로 올림 (BE)
+                        if highest >= entry * 1.01:
+                            trail_stop = max(entry, highest * (1 - trail))
+                        else:
+                            trail_stop = highest * (1 - trail)
                     else:
                         trail_stop = highest * (1 - trail)
                     pnl_pct      = (current - entry) / entry
