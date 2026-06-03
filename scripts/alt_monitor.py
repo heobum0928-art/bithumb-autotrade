@@ -124,7 +124,7 @@ VOLUME_POWER_MIN     = 100.0
 
 # 눌림목(풀백) 전략 파라미터
 PULLBACK_ENABLED     = False  # 비활성화: 과매도 반등 전략으로 전환 (2026-05-25)
-NEWLISTING_ENABLED   = False  # 신규 상장 즉시 진입 비활성화
+NEWLISTING_ENABLED   = True   # 신규 상장 즉시 진입 활성화
 PULLBACK_TARGET_PCT  = -0.035 # 고점 대비 -3.5% 눌림 시 진입 (황금구간 3~5%)
 PULLBACK_WAIT_SEC    = 300    # 5분 안에 눌림 안 오면 포기
 PULLBACK_ENTRY_KRW   = 15_000 # 데이터수집 소량 테스트 (50,000→15,000)
@@ -187,7 +187,8 @@ _oversold_watch_ids: dict[str, int] = {}         # coin → oversold_log.id (wat
 _oversold_min_rsi: dict[str, float] = {}         # coin → watching 구간 최저 RSI
 
 STATE_FILE      = Path("data/active_pos.json")
-LOCK_FILE       = Path("data/bot.lock")
+LOCK_FILE          = Path("data/bot.lock")
+KNOWN_COINS_PATH   = Path("data/known_coins.json")
 LOSS_COINS_FILE = Path("data/loss_coins.json")
 
 
@@ -1269,7 +1270,17 @@ def run():
     all_coins = client.get_all_coins_v2()
     symbols   = [f"{c}_KRW" for c in all_coins]
     tracker.start_ws(symbols)
-    known_coins     = set(all_coins)
+    # known_coins: 파일에서 로드해서 재시작 중 상장된 코인 누락 방지
+    try:
+        import json as _json
+        saved = set(_json.loads(KNOWN_COINS_PATH.read_text(encoding="utf-8")))
+        known_coins = saved | set(all_coins)  # 저장된 것 + 현재 것 합집합
+    except Exception:
+        known_coins = set(all_coins)
+    KNOWN_COINS_PATH.write_text(
+        __import__("json").dumps(list(known_coins), ensure_ascii=False),
+        encoding="utf-8",
+    )
     last_newlist_ts = 0.0
     log.info(f"[WS] {len(symbols)}개 코인 실시간 수신 시작 - 초기 데이터 수집 중...")
     time.sleep(5)
@@ -1908,16 +1919,17 @@ def run():
             if scan_count % 6 == 0:
                 log.info(f"[스캔] {len(tracker.coins())}개 코인 추적 중...")
 
-            # ── 신규 상장 감지 ────────────────────────────────────────────────
-            if pos is not None:
-                time.sleep(SCAN_SEC)
-                continue
+            # ── 신규 상장 감지 (포지션 보유 중에도 체크) ─────────────────────
             if NEWLISTING_ENABLED and time.time() - last_newlist_ts >= NEW_LIST_SCAN_SEC:
                 last_newlist_ts = time.time()
                 try:
                     cur_coins = set(client.get_all_coins_v2())
                     new_coins = cur_coins - known_coins
                     known_coins = cur_coins
+                    KNOWN_COINS_PATH.write_text(
+                        __import__("json").dumps(list(known_coins), ensure_ascii=False),
+                        encoding="utf-8",
+                    )
                     if new_coins:
                         nc = list(new_coins)[0]
                         log.warning(f"*** [신규 상장] {new_coins} 감지! ***")
@@ -1925,7 +1937,8 @@ def run():
                             f"<b>[신규 상장]</b> {', '.join(new_coins)} 감지!\n즉시 매수 진입",
                             force=True,
                         )
-                        if (nc not in SKIP_COINS and nc not in loss_coins
+                        if (pos is None  # 현재 포지션 없을 때만 진입
+                                and nc not in SKIP_COINS and nc not in loss_coins
                                 and daily_trades < MAX_DAILY_TRADES):
                             # 첫 체결가 > 0 확인 (가격 0이면 거래 미개시)
                             first_price = get_price(client, nc)
@@ -1960,6 +1973,11 @@ def run():
                                     continue
                 except Exception as e:
                     log.debug(f"[신규상장] 체크 오류: {e}")
+
+            # 포지션 있으면 일반 진입 탐색 스킵 (신규 상장 체크는 위에서 완료)
+            if pos is not None:
+                time.sleep(SCAN_SEC)
+                continue
 
             if not is_btc_bullish(client):
                 time.sleep(SCAN_SEC * 3)
