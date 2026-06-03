@@ -175,60 +175,105 @@ def collect_market_data(client: BithumbClient) -> str:
     return "\n".join(lines)
 
 
-def ask_claude(market_data: str, position: dict | None) -> dict:
-    """Claude에게 시장 데이터 주고 매수/대기 결정 받기."""
+def _run_claude(prompt: str) -> str:
+    """Claude CLI 호출 후 텍스트 반환."""
+    result = subprocess.run(
+        ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
+        capture_output=True, text=True, encoding="utf-8",
+        timeout=CLAUDE_TIMEOUT,
+    )
+    return result.stdout.strip()
+
+
+def _extract_json(text: str) -> dict | None:
+    start = text.find("{")
+    end   = text.rfind("}") + 1
+    if start == -1:
+        return None
+    try:
+        return json.loads(text[start:end])
+    except Exception:
+        return None
+
+
+def ask_claude_debate(market_data: str) -> dict:
+    """Bull vs Bear 토론 후 Judge 최종 판단."""
     now_kst = datetime.now(KST).strftime("%H:%M")
 
-    if position:
-        pos_text = (f"현재 보유: {position['coin']} "
-                    f"진입가:{position['entry_price']:,.1f}원 "
-                    f"TP:{position.get('tp_pct', 8)*100:.0f}% "
-                    f"SL:{position.get('sl_pct', 4)*100:.0f}%")
-    else:
-        pos_text = "현재 포지션 없음 — 진입 기회 탐색 중"
-
-    prompt = f"""너는 빗썸 암호화폐 단타 트레이더다. 지금 시각: {now_kst} KST
-
-{pos_text}
+    # ── 1단계: Bull (강세 분석가) ───────────────────────────────────────
+    bull_prompt = f"""너는 강세 암호화폐 트레이더다. 지금 시각: {now_kst} KST
 
 {market_data}
 
-=== 판단 기준 ===
-- 바이낸스에서 먼저 오르고 있는 코인 = 빗썸에서 곧 따라 오를 가능성
-- 펀딩율 양수(+) = 롱 우세 = 상승 분위기
-- 펀딩율 너무 높음(+0.1% 초과) = 과열 위험
-- 24h 변화율 +5~30% = 모멘텀 있음 (너무 높으면 과열)
-- 최근 같은 코인에서 SL 났으면 다시 진입 신중하게
+아래 코인 중 지금 당장 매수할 만한 코인 1개를 골라 적극적으로 추천해라.
+- 바이낸스 선행 + 빗썸 모멘텀 + 펀딩율 조합으로 판단
+- TP/SL도 제안해 (TP 5~15%, SL 3~8%)
 
-=== 포지션 없을 때 ===
-지금 당장 사야 할 코인이 있으면 아래 JSON.
-없으면 wait.
+한 문단으로 추천 이유 설명 후, 마지막 줄에 JSON:
+{{"coin": "심볼", "tp_pct": 8, "sl_pct": 4, "reason": "한 줄 요약"}}
+진입할 코인이 없으면: {{"coin": null, "reason": "이유"}}"""
 
-TP와 SL은 시장 상황에 맞게 직접 결정해. (예: TP 5~15%, SL 3~8%)
+    try:
+        bull_text = _run_claude(bull_prompt)
+        log.info(f"[CI][Bull] {bull_text[:120]}")
+    except Exception as e:
+        log.warning(f"Bull 호출 실패: {e}")
+        return {"action": "wait", "reason": f"Bull 오류: {e}"}
+
+    bull_json = _extract_json(bull_text)
+    if not bull_json or not bull_json.get("coin"):
+        log.info(f"[CI][Bull] 추천 없음 — wait")
+        return {"action": "wait", "reason": bull_json.get("reason", "Bull 추천 없음") if bull_json else "Bull 응답 파싱 실패"}
+
+    # ── 2단계: Bear (약세 분석가) ───────────────────────────────────────
+    bear_prompt = f"""너는 신중한 약세 분석가다. 지금 시각: {now_kst} KST
+
+{market_data}
+
+강세 분석가가 {bull_json['coin']} 매수를 추천했다:
+"{bull_json.get('reason', '')}"
+
+이 판단의 위험성과 반론을 구체적으로 제시해라.
+- 펀딩율, 과열 신호, 최근 손절 패턴, 시장 방향 등을 근거로
+- 한 문단으로 반론 후, 마지막 줄에 JSON:
+{{"risk_level": "높음/중간/낮음", "main_risk": "핵심 리스크 한 줄"}}"""
+
+    try:
+        bear_text = _run_claude(bear_prompt)
+        log.info(f"[CI][Bear] {bear_text[:120]}")
+    except Exception as e:
+        log.warning(f"Bear 호출 실패: {e}")
+        bear_text = ""
+
+    bear_json = _extract_json(bear_text) or {"risk_level": "중간", "main_risk": "Bear 분석 실패"}
+
+    # ── 3단계: Judge (최종 판단) ────────────────────────────────────────
+    judge_prompt = f"""너는 최종 결정권자다. 지금 시각: {now_kst} KST
+
+강세 의견:
+{bull_text[:300]}
+
+약세 의견:
+{bear_text[:300]}
+
+두 의견을 종합해서 최종 결정을 내려라.
+리스크가 "{bear_json.get('risk_level', '중간')}"이고 핵심 리스크는 "{bear_json.get('main_risk', '')}"다.
 
 JSON만 응답:
-{{"action": "buy", "coin": "심볼", "tp_pct": 8, "sl_pct": 4, "reason": "한 줄 이유"}}
+{{"action": "buy", "coin": "심볼", "tp_pct": 8, "sl_pct": 4, "reason": "최종 판단 한 줄"}}
 또는
 {{"action": "wait", "reason": "한 줄 이유"}}"""
 
     try:
-        result = subprocess.run(
-            ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True, text=True, encoding="utf-8",
-            timeout=CLAUDE_TIMEOUT,
-        )
-        text = result.stdout.strip()
-        if not text:
-            return {"action": "wait", "reason": "빈 응답"}
-        # JSON 추출
-        start = text.find("{")
-        end   = text.rfind("}") + 1
-        if start == -1:
-            return {"action": "wait", "reason": "JSON 없음"}
-        return json.loads(text[start:end])
+        judge_text = _run_claude(judge_prompt)
+        log.info(f"[CI][Judge] {judge_text[:120]}")
+        final = _extract_json(judge_text)
+        if final:
+            return final
     except Exception as e:
-        log.warning(f"Claude 호출 실패: {e}")
-        return {"action": "wait", "reason": f"오류: {e}"}
+        log.warning(f"Judge 호출 실패: {e}")
+
+    return {"action": "wait", "reason": "Judge 판단 실패"}
 
 # ── 포지션 모니터링 + 청산 ────────────────────────────────────────────────────
 
@@ -340,11 +385,11 @@ def run() -> None:
             time.sleep(60)
             continue
 
-        # 3. 데이터 수집 + Claude 판단
+        # 3. 데이터 수집 + Claude 토론 판단
         log.info(f"[CI] 데이터 수집 중... (잔고 {balance:,.0f}원)")
         try:
             market_data = collect_market_data(client)
-            decision    = ask_claude(market_data, state.get("position"))
+            decision    = ask_claude_debate(market_data)
         except Exception as e:
             log.error(f"데이터 수집/Claude 오류: {e}")
             time.sleep(60)
