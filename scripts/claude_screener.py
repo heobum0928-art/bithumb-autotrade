@@ -691,9 +691,10 @@ WATCH_ENTRY_KRW   = 200_000
 WATCH_STATE_PATH  = Path("data/claude_watch_state.json")
 
 # 코드 기반 즉시 진입 조건
-WATCH_CHG1M_MIN   = 0.3   # 1분 변화율 최소 (%) — 야간 데이터 수집용
-WATCH_VOL_MULT    = 1.5   # 거래량 배수 최소 — 야간 데이터 수집용
+WATCH_CHG1M_MIN   = 0.3   # 1분 변화율 최소 (%)
+WATCH_VOL_MULT    = 1.5   # 거래량 배수 최소
 WATCH_TICK_RATIO  = 0.55  # 체결강도 최소 (매수 55% 이상)
+WATCH_ACTIVE_HOURS = {18, 19, 20}  # 진입 허용 시간대 KST (74건 분석: 18시 67%, 20시 50%)
 WATCH_TRAIL_PCT   = 0.015 # 트레일링 스탑 (-1.5% from high)
 
 
@@ -916,7 +917,11 @@ def run_watch() -> None:
                 log.warning(f"[WATCH] 워치리스트 갱신 실패: {e}")
 
         # ── 3. 워치리스트 코인 즉시 진입 체크 (코드만) ───────────────────────
-        if watchlist and len(positions) < WATCH_MAX_POS and balance >= WATCH_ENTRY_KRW:
+        now_kst_h = datetime.now(KST).hour
+        in_active = now_kst_h in WATCH_ACTIVE_HOURS
+        if not in_active and watchlist:
+            log.debug(f"[WATCH] 비활성 시간대({now_kst_h}시) — 진입 차단")
+        if watchlist and in_active and len(positions) < WATCH_MAX_POS and balance >= WATCH_ENTRY_KRW:
             held = {p["coin"] for p in positions}
             for coin in watchlist:
                 if coin in held:

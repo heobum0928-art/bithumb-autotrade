@@ -34,9 +34,10 @@ log = logging.getLogger(__name__)
 CHECK_INTERVAL = 30  # 초마다 프로세스 확인
 
 BOTS = {
-    "alt_monitor":    ROOT / "scripts" / "alt_monitor.py",
-    "tg_bot":         ROOT / "scripts" / "tg_bot.py",
-    "claude_screener": ROOT / "scripts" / "claude_screener.py",
+    "alt_monitor":           ROOT / "scripts" / "alt_monitor.py",
+    "tg_bot":                ROOT / "scripts" / "tg_bot.py",
+    "claude_screener_dry":   ROOT / "scripts" / "claude_screener.py",  # 페이퍼 트레이딩
+    "claude_screener_watch": ROOT / "scripts" / "claude_screener.py",  # Watch Mode
 }
 
 
@@ -56,12 +57,29 @@ def send_tg(text: str) -> None:
         pass
 
 
+EXTRA_ARGS: dict[str, list[str]] = {
+    "claude_screener_dry":   ["--dry-run"],
+    "claude_screener_watch": ["--watch-mode"],
+}
+
+# 인스턴스 식별용 kill 키워드 매핑
+KILL_KEYWORDS: dict[str, str] = {
+    "claude_screener_dry":   "--dry-run",
+    "claude_screener_watch": "--watch-mode",
+}
+
+
 def kill_existing(name: str) -> None:
-    keyword = f"{name}.py"
+    extra_kw = KILL_KEYWORDS.get(name)
+    script_kw = f"{name}.py" if not extra_kw else "claude_screener.py"
     for p in psutil.process_iter(["pid", "cmdline"]):
         try:
-            cmd = " ".join(p.info["cmdline"] or [])
-            if keyword in cmd and p.pid != os.getpid():
+            parts = p.info["cmdline"] or []
+            # 스크립트 파일명이 독립 인자로 있을 때만 매칭 (문자열 내부 포함 방지)
+            match = any(part.endswith(script_kw) for part in parts)
+            if extra_kw:
+                match = match and extra_kw in parts
+            if match and p.pid != os.getpid():
                 log.warning(f"[{name}] 기존 PID {p.pid} 종료")
                 p.terminate()
                 try:
@@ -83,8 +101,9 @@ def start_bot(name: str, script: Path) -> subprocess.Popen:
             except Exception:
                 pass
     log.info(f"[{name}] 시작")
+    extra = EXTRA_ARGS.get(name, [])
     proc = subprocess.Popen(
-        [sys.executable, str(script)],
+        [sys.executable, str(script)] + extra,
         cwd=str(ROOT),
     )
     time.sleep(5)  # 새 프로세스가 lockfile 쓸 시간 확보
