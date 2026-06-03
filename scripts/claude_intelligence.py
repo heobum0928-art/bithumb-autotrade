@@ -129,8 +129,7 @@ def collect_market_data(client: BithumbClient) -> str:
     for coin in WATCH_COINS:
         try:
             # 빗썸 현재가 + 24h 변화
-            tickers = client.get_all_tickers()
-            t = tickers.get(coin, {})
+            t = client.get_ticker(coin) or {}
             bithumb_price  = float(t.get("closing_price") or 0)
             chg_24h        = float(t.get("fluctate_rate_24H") or 0)
             vol_24h        = float(t.get("acc_trade_value_24H") or 0)
