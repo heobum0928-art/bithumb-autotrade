@@ -38,6 +38,7 @@ BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_screener_dry":   ROOT / "scripts" / "claude_screener.py",  # 페이퍼 트레이딩
     "claude_screener_watch": ROOT / "scripts" / "claude_screener.py",  # Watch Mode
+    "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
 }
 
 
@@ -60,6 +61,7 @@ def send_tg(text: str) -> None:
 EXTRA_ARGS: dict[str, list[str]] = {
     "claude_screener_dry":   ["--dry-run"],
     "claude_screener_watch": ["--watch-mode"],
+    "swing_monitor":         ["--loop"],
 }
 
 # 인스턴스 식별용 kill 키워드 매핑
