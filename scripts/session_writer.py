@@ -49,6 +49,20 @@ def run(target_date: str | None = None) -> None:
         (today,),
     ).fetchone()
 
+    # ── 모의투자 데이터 ───────────────────────────────────────────────
+    dry_trades = conn.execute(
+        "SELECT coin, entered_at, pnl_krw, pnl_pct, exit_reason, max_pnl_pct "
+        "FROM trades WHERE date=? AND exit_reason LIKE '%CS-DRY%' ORDER BY entered_at",
+        (today,),
+    ).fetchall()
+
+    # ── CI Mode 데이터 ────────────────────────────────────────────────
+    ci_trades = conn.execute(
+        "SELECT coin, entered_at, pnl_krw, pnl_pct, exit_reason, max_pnl_pct, claude_reason "
+        "FROM trades WHERE date=? AND exit_reason LIKE '%CS-CI%' ORDER BY entered_at",
+        (today,),
+    ).fetchall()
+
     conn.close()
 
     # ── 집계 ─────────────────────────────────────────────────────────
@@ -102,6 +116,41 @@ def run(target_date: str | None = None) -> None:
         lines.append(f"- 감지: {pump_total}건 | -2% 눌림 발생: {pump_pullback}건 | 반등 성공: {pump_bounce}건")
         if pump_total > 0:
             lines.append(f"- 눌림 발생률: {pump_pullback/pump_total*100:.0f}% | 반등률: {pump_bounce/max(pump_pullback,1)*100:.0f}%")
+        lines.append("")
+
+    # 모의투자 요약
+    if dry_trades:
+        dry_tp   = sum(1 for t in dry_trades if 'TP' in (t[4] or ''))
+        dry_sl   = sum(1 for t in dry_trades if 'SL' in (t[4] or ''))
+        dry_be   = sum(1 for t in dry_trades if 'BE' in (t[4] or ''))
+        dry_pnl  = sum(t[2] or 0 for t in dry_trades)
+        dry_wr   = dry_tp / len(dry_trades) * 100
+        lines.append("## 모의투자 (CS-DRY)")
+        lines.append(f"- {len(dry_trades)}건 | TP{dry_tp}/SL{dry_sl}/BE{dry_be} | 승률 {dry_wr:.0f}% | PnL **{dry_pnl:+,.0f}원**\n")
+        lines.append("| 코인 | 진입시각 | PnL | 최고점 | 청산 |")
+        lines.append("|---|---|---|---|---|")
+        for coin, eat, pnl, pnl_pct, reason, max_p in dry_trades:
+            t = eat[11:16] if eat else "-"
+            reason_short = (reason or '-').replace('[CS-DRY] ', '')
+            lines.append(f"| {coin} | {t} | {(pnl or 0):+,.0f}원 | +{(max_p or 0):.1f}% | {reason_short} |")
+        lines.append("")
+
+    # CI Mode 요약
+    if ci_trades:
+        ci_tp  = sum(1 for t in ci_trades if 'TP' in (t[4] or ''))
+        ci_sl  = sum(1 for t in ci_trades if 'SL' in (t[4] or ''))
+        ci_be  = sum(1 for t in ci_trades if 'BE' in (t[4] or ''))
+        ci_pnl = sum(t[2] or 0 for t in ci_trades)
+        ci_wr  = ci_tp / len(ci_trades) * 100
+        lines.append("## Claude Intelligence Mode (CS-CI)")
+        lines.append(f"- {len(ci_trades)}건 | TP{ci_tp}/SL{ci_sl}/BE{ci_be} | 승률 {ci_wr:.0f}% | PnL **{ci_pnl:+,.0f}원**\n")
+        lines.append("| 코인 | 진입시각 | PnL | Claude 판단 이유 | 청산 |")
+        lines.append("|---|---|---|---|---|")
+        for coin, eat, pnl, pnl_pct, reason, max_p, claude_r in ci_trades:
+            t = eat[11:16] if eat else "-"
+            reason_short = (reason or '-').replace('[CS-CI] ', '')
+            claude_short = (claude_r or '-')[:50]
+            lines.append(f"| {coin} | {t} | {(pnl or 0):+,.0f}원 | {claude_short} | {reason_short} |")
         lines.append("")
 
     # 봇 상태
