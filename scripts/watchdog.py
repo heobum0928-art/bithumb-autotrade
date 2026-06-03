@@ -37,7 +37,7 @@ BOTS = {
     "alt_monitor":           ROOT / "scripts" / "alt_monitor.py",
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_screener_dry":   ROOT / "scripts" / "claude_screener.py",  # 페이퍼 트레이딩
-    "claude_screener_watch": ROOT / "scripts" / "claude_screener.py",  # Watch Mode
+    "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
 }
 
