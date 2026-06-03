@@ -1,5 +1,5 @@
 """
-스윙 트레이딩 모니터 — 매일 MA 크로스 체크 + 텔레그램 알림
+스윙 트레이딩 모니터 - 매일 MA 크로스 체크 + 텔레그램 알림
 
 전략:
   BTC  MA 20/60 골든/데드크로스
@@ -143,14 +143,14 @@ def check_once() -> None:
     if signals:
         summary += "\n\n⚡ <b>신호 발생!</b> 위 메시지 확인"
     else:
-        summary += "\n\n신호 없음 — 대기 중"
+        summary += "\n\n신호 없음 - 대기 중"
     _send_tg(summary)
     print(f"  텔레그램 발송 완료 (신호 {len(signals)}개)")
 
 # ── 루프 ─────────────────────────────────────────────────────────────────────
 
 def run_loop() -> None:
-    print(f"스윙 모니터 시작 — 매일 {CHECK_HOUR_KST}:00 KST 체크")
+    print(f"스윙 모니터 시작 - 매일 {CHECK_HOUR_KST}:00 KST 체크")
     last_check_date = None
 
     while True:
