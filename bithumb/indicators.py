@@ -43,6 +43,60 @@ def is_funding_ok(coin: str) -> bool:
     return rate <= FUNDING_RATE_MAX
 
 
+# ── 바이낸스 현물 리드 신호 ────────────────────────────────────────────────────
+# 바이낸스가 빗썸보다 30초~5분 먼저 움직이는 특성 활용
+# 바이낸스에서 먼저 오른 코인 → 빗썸에서 매수 (리드-팔로우 전략)
+
+BNB_SPOT_CHG_MIN  = 0.0    # 바이낸스 1분 변화율 최소 (%) — 0 이상이면 통과 (하락 중에만 차단)
+BNB_SPOT_CACHE_TTL = 30    # 30초 캐시 (1분봉 데이터)
+_bnb_spot_cache: dict[str, tuple[float, float]] = {}  # coin → (chg, ts)
+
+
+def get_binance_spot_chg1m(coin: str, timeout: float = 2.0) -> float | None:
+    """바이낸스 현물 최근 1분봉 변화율(%). 미상장·오류 시 None 반환.
+
+    None = 신호 없음이 아닌 "정보 없음" → 진입 허용.
+    """
+    now = time.time()
+    cached = _bnb_spot_cache.get(coin)
+    if cached and now - cached[1] < BNB_SPOT_CACHE_TTL:
+        return cached[0]
+    symbol = f"{coin.upper()}USDT"
+    try:
+        resp = _requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={"symbol": symbol, "interval": "1m", "limit": 2},
+            timeout=timeout,
+        )
+        if resp.status_code == 400:   # 바이낸스 미상장
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        if len(data) < 2:
+            return None
+        prev_close = float(data[0][4])
+        curr_close = float(data[1][4])
+        if prev_close == 0:
+            return None
+        chg = round((curr_close - prev_close) / prev_close * 100, 3)
+        _bnb_spot_cache[coin] = (chg, now)
+        return chg
+    except Exception:
+        return None
+
+
+def is_binance_leading(coin: str) -> bool:
+    """바이낸스에서 먼저 오르고 있는가? 미상장·오류 시 True(진입 허용).
+
+    True = 바이낸스 리드 확인됨 or 미상장(빗썸 전용 코인) → 진입 OK
+    False = 바이낸스에서 오히려 내리는 중 → 진입 보류
+    """
+    chg = get_binance_spot_chg1m(coin)
+    if chg is None:
+        return True   # 미상장·오류 → 차단하지 않음
+    return chg >= BNB_SPOT_CHG_MIN
+
+
 def _closes(candles: list[dict]) -> list[float]:
     """Extract close prices in chronological order (candles are newest-first)."""
     return [float(c["trade_price"]) for c in reversed(candles)]

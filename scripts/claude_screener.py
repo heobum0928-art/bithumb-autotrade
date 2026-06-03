@@ -27,7 +27,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from bithumb.client import BithumbClient
 from bithumb.db import DB_PATH, log_trade
-from bithumb.indicators import is_funding_ok
+from bithumb.indicators import is_funding_ok, is_binance_leading, get_binance_spot_chg1m
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 KST               = timezone(timedelta(hours=9))
@@ -951,13 +951,18 @@ def run_watch() -> None:
                 chg1m      = _get_chg1m(client, coin)
                 vol_mult   = _get_vol_mult(client, coin)
                 tick_ratio = _get_tick_ratio(client, coin)
-                funding_ok = is_funding_ok(coin)
+                funding_ok  = is_funding_ok(coin)
+                bnb_leading = is_binance_leading(coin)
+                bnb_chg     = get_binance_spot_chg1m(coin)
                 if not funding_ok:
-                    log.info(f"[WATCH {coin}] 바이낸스 펀딩율 과열(+0.1% 초과) — 진입 스킵")
+                    log.info(f"[WATCH {coin}] 바이낸스 펀딩율 과열 — 스킵")
+                if not bnb_leading:
+                    log.info(f"[WATCH {coin}] 바이낸스 리드 없음 (bnb_chg={bnb_chg:+.2f}%) — 스킵")
                 if (chg1m >= WATCH_CHG1M_MIN
                         and vol_mult >= WATCH_VOL_MULT
                         and tick_ratio >= WATCH_TICK_RATIO
-                        and funding_ok):
+                        and funding_ok
+                        and bnb_leading):
                     price = get_current_price(client, coin)
                     if price > 0 and balance >= WATCH_ENTRY_KRW:
                         vol = WATCH_ENTRY_KRW / price
@@ -969,7 +974,7 @@ def run_watch() -> None:
                             "entered_at": datetime.now(KST).isoformat(),
                             "entry_chg1m": round(chg1m, 2),
                             "entry_vol_mult": round(vol_mult, 2),
-                            "reason": f"chg1m={chg1m:+.2f}% vol={vol_mult:.1f}x tick={tick_ratio*100:.0f}%",
+                            "reason": f"chg1m={chg1m:+.2f}% vol={vol_mult:.1f}x tick={tick_ratio*100:.0f}% bnb={bnb_chg:+.2f}%" if bnb_chg is not None else f"chg1m={chg1m:+.2f}% vol={vol_mult:.1f}x tick={tick_ratio*100:.0f}%",
                             "entry_chg24h": coin_data.get("chg_24h") if coin_data else None,
                             "entry_chg5m":  coin_data.get("chg5m") if coin_data else None,
                             "entry_btc_chg": btc_chg,
