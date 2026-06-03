@@ -114,13 +114,13 @@ def run(target_date: str | None = None) -> None:
     # ── CI Mode 데이터 (당일) ────────────────────────────────────────────────
     ci_trades = conn.execute(
         "SELECT coin, entered_at, pnl_krw, pnl_pct, exit_reason, max_pnl_pct, claude_reason "
-        "FROM trades WHERE date=? AND exit_reason LIKE '%CS-CI%' ORDER BY entered_at",
+        "FROM trades WHERE date=? AND exit_reason LIKE '%CS-CID%' ORDER BY entered_at",
         (today,),
     ).fetchall()
 
     # ── CI Mode 누적 ──────────────────────────────────────────────────
     ci_all = conn.execute(
-        "SELECT pnl_krw, exit_reason FROM trades WHERE exit_reason LIKE '%CS-CI%'"
+        "SELECT pnl_krw, exit_reason FROM trades WHERE exit_reason LIKE '%CS-CID%'"
     ).fetchall()
 
     conn.close()

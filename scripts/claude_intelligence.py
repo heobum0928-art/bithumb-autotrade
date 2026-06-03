@@ -30,7 +30,7 @@ from bithumb.indicators import get_binance_funding_rate, get_binance_spot_chg1m
 KST             = timezone(timedelta(hours=9))
 CI_STATE_PATH   = Path("data/claude_ci_state.json")
 CI_LOG_FILE     = "logs/claude_ci.log"
-CI_TAG          = "CS-CI"
+CI_TAG          = "CS-CID"
 
 SCAN_INTERVAL   = 300    # 5분마다 Claude 분석
 CHECK_INTERVAL  = 10     # 10초마다 포지션 체크
