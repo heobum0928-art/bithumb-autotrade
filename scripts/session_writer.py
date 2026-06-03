@@ -3,6 +3,7 @@ Daily session log auto-writer.
 DB에서 당일 거래/신호 데이터를 읽어 docs/sessions/YYYY-MM-DD.md 자동 생성.
 watchdog.py가 날짜 변경 시 또는 시작 시 자동 호출.
 """
+import re
 import sys
 import sqlite3
 from datetime import date, datetime, timezone, timedelta
@@ -12,10 +13,64 @@ KST = timezone(timedelta(hours=9))
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-ROOT     = Path(__file__).parent.parent
-DB_PATH  = ROOT / "data" / "trades.db"
-SESS_DIR = ROOT / "docs" / "sessions"
+ROOT      = Path(__file__).parent.parent
+DB_PATH   = ROOT / "data" / "trades.db"
+SESS_DIR  = ROOT / "docs" / "sessions"
+PERF_PATH = ROOT / "docs" / "PERFORMANCE.md"
 SESS_DIR.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(ROOT))
+
+
+def _handle_ci_report(today: str, ci_trades: list, ci_all: list) -> None:
+    """PERFORMANCE.md CI 섹션 업데이트 + 텔레그램 알림."""
+    # 당일 집계
+    today_tp  = sum(1 for t in ci_trades if 'TP' in (t[4] or ''))
+    today_sl  = sum(1 for t in ci_trades if 'SL' in (t[4] or ''))
+    today_be  = sum(1 for t in ci_trades if 'BE' in (t[4] or ''))
+    today_pnl = sum(t[2] or 0 for t in ci_trades)
+
+    # 누적 집계
+    total_cnt = len(ci_all)
+    total_tp  = sum(1 for t in ci_all if 'TP' in (t[1] or ''))
+    total_sl  = sum(1 for t in ci_all if 'SL' in (t[1] or ''))
+    total_be  = sum(1 for t in ci_all if 'BE' in (t[1] or ''))
+    total_pnl = sum(t[0] or 0 for t in ci_all)
+    total_wr  = total_tp / total_cnt * 100 if total_cnt else 0
+
+    # PERFORMANCE.md 업데이트
+    GO_TARGET = 30
+    remaining = max(0, GO_TARGET - total_cnt)
+    if PERF_PATH.exists():
+        content = PERF_PATH.read_text(encoding="utf-8")
+        section = (
+            f"<!-- CI_START -->\n"
+            f"## Claude Intelligence Mode 누적\n\n"
+            f"| 항목 | 수치 |\n"
+            f"|------|------|\n"
+            f"| 총 건수 | {total_cnt}건 (GO까지 {remaining}건 남음) |\n"
+            f"| 승률 | {total_wr:.0f}% (TP{total_tp}/SL{total_sl}/BE{total_be}) |\n"
+            f"| 누적 PnL | **{total_pnl:+,.0f}원** |\n"
+            f"| 마지막 업데이트 | {today} |\n"
+            f"<!-- CI_END -->"
+        )
+        if "<!-- CI_START -->" in content:
+            content = re.sub(r"<!-- CI_START -->.*?<!-- CI_END -->", section, content, flags=re.DOTALL)
+        else:
+            content = content.rstrip() + "\n\n---\n\n" + section + "\n"
+        PERF_PATH.write_text(content, encoding="utf-8")
+        print(f"[session_writer] PERFORMANCE.md CI 섹션 업데이트 완료")
+
+    # 텔레그램 알림
+    try:
+        from bithumb.notify import notify_ci_daily
+        notify_ci_daily(
+            today_cnt=len(ci_trades), today_pnl=today_pnl,
+            today_tp=today_tp, today_sl=today_sl, today_be=today_be,
+            total_cnt=total_cnt, total_wr=total_wr, total_pnl=total_pnl,
+        )
+    except Exception as e:
+        print(f"[session_writer] 텔레그램 CI 알림 실패: {e}")
 
 
 def run(target_date: str | None = None) -> None:
@@ -56,11 +111,16 @@ def run(target_date: str | None = None) -> None:
         (today,),
     ).fetchall()
 
-    # ── CI Mode 데이터 ────────────────────────────────────────────────
+    # ── CI Mode 데이터 (당일) ────────────────────────────────────────────────
     ci_trades = conn.execute(
         "SELECT coin, entered_at, pnl_krw, pnl_pct, exit_reason, max_pnl_pct, claude_reason "
         "FROM trades WHERE date=? AND exit_reason LIKE '%CS-CI%' ORDER BY entered_at",
         (today,),
+    ).fetchall()
+
+    # ── CI Mode 누적 ──────────────────────────────────────────────────
+    ci_all = conn.execute(
+        "SELECT pnl_krw, exit_reason FROM trades WHERE exit_reason LIKE '%CS-CI%'"
     ).fetchall()
 
     conn.close()
@@ -161,6 +221,10 @@ def run(target_date: str | None = None) -> None:
     out = SESS_DIR / f"{today}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     print(f"[session_writer] {out.name} 작성 완료")
+
+    # ── CI 누적 통계 + PERFORMANCE.md 업데이트 + 텔레그램 ──────────────
+    if ci_trades and ci_all:
+        _handle_ci_report(today, ci_trades, ci_all)
 
 
 if __name__ == "__main__":

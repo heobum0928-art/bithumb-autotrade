@@ -83,3 +83,19 @@ def notify_daily(total_pnl: float, count: int, win_rate: float) -> None:
 
 def notify_error(msg: str) -> None:
     send(f"<b>[오류]</b> {msg}", force=True)  # 오류는 무음 무시
+
+
+def notify_ci_daily(
+    today_cnt: int, today_pnl: float, today_tp: int, today_sl: int, today_be: int,
+    total_cnt: int, total_wr: float, total_pnl: float, go_target: int = 30,
+) -> None:
+    remaining = max(0, go_target - total_cnt)
+    sign = "+" if today_pnl >= 0 else ""
+    send(
+        f"<b>📊 [CI 일일 리포트]</b>\n"
+        f"오늘: {today_cnt}건 | TP{today_tp}/SL{today_sl}/BE{today_be} | <b>{sign}{today_pnl:,.0f}원</b>\n"
+        f"\n<b>── 누적 ──</b>\n"
+        f"총 {total_cnt}건 (GO까지 {remaining}건 남음)\n"
+        f"승률 {total_wr:.0f}% | PnL <b>{total_pnl:+,.0f}원</b>",
+        force=True,
+    )
