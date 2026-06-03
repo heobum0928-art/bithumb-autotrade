@@ -105,7 +105,8 @@ def _send_tg(text: str) -> None:
 
 def get_current_price(client: BithumbClient, coin: str) -> float:
     try:
-        return float(client.get_price(f"KRW-{coin}") or 0)
+        t = client.get_ticker(coin) or {}
+        return float(t.get("closing_price") or 0)
     except Exception:
         return 0.0
 
