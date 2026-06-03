@@ -239,6 +239,21 @@ def get_recent_trades(n: int = 10) -> list[dict]:
         return []
 
 
+def get_today_pnl_krw() -> float:
+    """오늘 실현 손익 합계 (현재 모드만). 조회 실패 시 0 반환."""
+    try:
+        today = datetime.now(KST).date().isoformat()
+        con = sqlite3.connect(str(DB_PATH))
+        row = con.execute(
+            "SELECT COALESCE(SUM(pnl_krw),0) FROM trades WHERE exited_at >= ? AND exit_reason LIKE ?",
+            (today, f"%{_LOG_TAG}%"),
+        ).fetchone()
+        con.close()
+        return float(row[0]) if row else 0.0
+    except Exception:
+        return 0.0
+
+
 def get_today_traded_coins() -> set[str]:
     """오늘 이미 거래된 코인 목록 (재진입 금지용, 현재 모드만)."""
     try:
@@ -695,8 +710,9 @@ WATCH_STATE_PATH  = Path("data/claude_watch_state.json")
 WATCH_CHG1M_MIN   = 0.3   # 1분 변화율 최소 (%)
 WATCH_VOL_MULT    = 1.5   # 거래량 배수 최소
 WATCH_TICK_RATIO  = 0.55  # 체결강도 최소 (매수 55% 이상)
-WATCH_BAD_HOURS = {22, 23, 0, 1}  # 진입 금지 시간대 KST (687건 분석: EV -1.5~-2.35%)
-WATCH_TRAIL_PCT   = 0.015 # 트레일링 스탑 (-1.5% from high)
+WATCH_BAD_HOURS       = {22, 23, 0, 1}  # 진입 금지 시간대 KST (EV -1.5~-2.35%)
+WATCH_TRAIL_PCT       = 0.015            # 트레일링 스탑 (-1.5% from high)
+WATCH_DAILY_LOSS_LIMIT = -100_000        # 일일 손실 한도 (원). 초과 시 당일 거래 중단
 
 
 def _get_recent_watch_results(hours: int = 2) -> str:
@@ -918,11 +934,17 @@ def run_watch() -> None:
                 log.warning(f"[WATCH] 워치리스트 갱신 실패: {e}")
 
         # ── 3. 워치리스트 코인 즉시 진입 체크 (코드만) ───────────────────────
-        now_kst_h = datetime.now(KST).hour
+        now_kst_h  = datetime.now(KST).hour
         in_bad_hour = now_kst_h in WATCH_BAD_HOURS
+        today_pnl   = get_today_pnl_krw()
+        hit_limit   = today_pnl <= WATCH_DAILY_LOSS_LIMIT
+
         if in_bad_hour and watchlist:
             log.debug(f"[WATCH] 저유동성 시간대({now_kst_h}시) — 진입 차단")
-        if watchlist and not in_bad_hour and len(positions) < WATCH_MAX_POS and balance >= WATCH_ENTRY_KRW:
+        if hit_limit and watchlist:
+            log.warning(f"[WATCH] 일일 손실 한도 도달 ({today_pnl:,.0f}원) — 오늘 거래 중단")
+        if (watchlist and not in_bad_hour and not hit_limit
+                and len(positions) < WATCH_MAX_POS and balance >= WATCH_ENTRY_KRW):
             held = {p["coin"] for p in positions}
             for coin in watchlist:
                 if coin in held:
