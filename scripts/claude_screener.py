@@ -937,12 +937,11 @@ def run_watch() -> None:
         now_kst_h  = datetime.now(KST).hour
         in_bad_hour = now_kst_h in WATCH_BAD_HOURS
         today_pnl   = get_today_pnl_krw()
-        hit_limit   = today_pnl <= WATCH_DAILY_LOSS_LIMIT
+        # 회로차단기: 실전 전환 후에만 활성 (모의투자 기간엔 데이터 수집 우선)
+        hit_limit   = False  # TODO: 실전 전환 시 → today_pnl <= WATCH_DAILY_LOSS_LIMIT
 
         if in_bad_hour and watchlist:
             log.debug(f"[WATCH] 저유동성 시간대({now_kst_h}시) — 진입 차단")
-        if hit_limit and watchlist:
-            log.warning(f"[WATCH] 일일 손실 한도 도달 ({today_pnl:,.0f}원) — 오늘 거래 중단")
         if (watchlist and not in_bad_hour and not hit_limit
                 and len(positions) < WATCH_MAX_POS and balance >= WATCH_ENTRY_KRW):
             held = {p["coin"] for p in positions}
