@@ -1,4 +1,46 @@
 """Technical indicator calculations from candle data."""
+import time
+import requests as _requests
+
+# ── 바이낸스 펀딩율 ────────────────────────────────────────────────────────────
+
+FUNDING_RATE_MAX  = 0.001   # +0.1% 초과 시 롱 과열 — 진입 차단
+FUNDING_CACHE_TTL = 300     # 5분 캐시 (펀딩율은 8시간 주기로 갱신)
+_funding_cache: dict[str, tuple[float, float]] = {}  # coin → (rate, ts)
+
+
+def get_binance_funding_rate(coin: str, timeout: float = 2.0) -> float | None:
+    """바이낸스 선물 펀딩율 조회. 미상장·오류 시 None 반환 (진입 허용).
+
+    None = 필터 스킵 (차단 아님). 봇 장애 방지 우선.
+    """
+    now = time.time()
+    cached = _funding_cache.get(coin)
+    if cached and now - cached[1] < FUNDING_CACHE_TTL:
+        return cached[0]
+    symbol = f"{coin.upper()}USDT"
+    try:
+        resp = _requests.get(
+            "https://fapi.binance.com/fapi/v1/premiumIndex",
+            params={"symbol": symbol},
+            timeout=timeout,
+        )
+        if resp.status_code == 400:   # 바이낸스 미상장
+            return None
+        resp.raise_for_status()
+        rate = float(resp.json()["lastFundingRate"])
+        _funding_cache[coin] = (rate, now)
+        return rate
+    except Exception:
+        return None
+
+
+def is_funding_ok(coin: str) -> bool:
+    """펀딩율이 과열(+0.1% 초과)이 아니면 True. 조회 실패 시 True(통과)."""
+    rate = get_binance_funding_rate(coin)
+    if rate is None:
+        return True   # 미상장·오류 → 차단하지 않음
+    return rate <= FUNDING_RATE_MAX
 
 
 def _closes(candles: list[dict]) -> list[float]:

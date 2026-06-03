@@ -27,6 +27,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from bithumb.client import BithumbClient
 from bithumb.db import DB_PATH, log_trade
+from bithumb.indicators import is_funding_ok
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 KST               = timezone(timedelta(hours=9))
@@ -929,9 +930,13 @@ def run_watch() -> None:
                 chg1m      = _get_chg1m(client, coin)
                 vol_mult   = _get_vol_mult(client, coin)
                 tick_ratio = _get_tick_ratio(client, coin)
+                funding_ok = is_funding_ok(coin)
+                if not funding_ok:
+                    log.info(f"[WATCH {coin}] 바이낸스 펀딩율 과열(+0.1% 초과) — 진입 스킵")
                 if (chg1m >= WATCH_CHG1M_MIN
                         and vol_mult >= WATCH_VOL_MULT
-                        and tick_ratio >= WATCH_TICK_RATIO):
+                        and tick_ratio >= WATCH_TICK_RATIO
+                        and funding_ok):
                     price = get_current_price(client, coin)
                     if price > 0 and balance >= WATCH_ENTRY_KRW:
                         vol = WATCH_ENTRY_KRW / price
