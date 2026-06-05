@@ -5,15 +5,22 @@ import csv
 import sqlite3
 import statistics
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from bithumb.db import DB_PATH, get_ticks
 
+@dataclass(frozen=True)
+class Strategy:
+    """그리드 서치가 주입하는 전략 파라미터 묶음. TIMEOUT_SEC은 D-09에 따라 고정."""
+    entry_drop_pct: float = 0.07
+    tp_pct: float = 0.05
+    sl_pct: float = 0.03
+
+DEFAULT_STRATEGY = Strategy()
+
 # ── 전략 상수 (D-08: Phase 2는 고정 1조합. Phase 3가 그리드 서치로 파라미터화) ──
-ENTRY_DROP_PCT   = 0.07    # D-02: 주행 고점 대비 -7% 눌림에서 진입
-TP_PCT           = 0.05    # D-06: 익절 +5%
-SL_PCT           = 0.03    # D-06: 손절 -3%
 TIMEOUT_SEC      = 600     # D-06: 시간초과 청산 (10분 = 이벤트 길이)
 MIN_TICKS        = 4       # 이 미만의 틱을 가진 이벤트는 스킵 (Discretion)
 GAP_EXCLUDE_PCT  = 0.30    # D-15: 갭 비율이 30% 초과면 이벤트 통째 제외
@@ -119,10 +126,10 @@ def _close(entry: dict, exit_tick: dict, slippage: float, reason: str) -> dict:
     }
 
 
-def simulate_event(ticks: list[dict], slippage: float) -> dict | None:
+def simulate_event(ticks: list[dict], slippage: float, strategy: Strategy = DEFAULT_STRATEGY) -> dict | None:
     """한 펌핑 이벤트의 틱을 시간순 재생해 눌림목 진입·청산을 시뮬레이션 (BT-02).
 
-    상태 머신 WAITING_ENTRY -> IN_POSITION. 진입은 주행 고점 대비 -ENTRY_DROP_PCT
+    상태 머신 WAITING_ENTRY -> IN_POSITION. 진입은 주행 고점 대비 -strategy.entry_drop_pct
     눌림 시 충족되며, 진입·청산 체결가 모두 "다음 틱"(cursor+1) price를 쓴다
     (D-04/D-07 lookahead 방지). 갭 틱(gap_before=1)은 TP/SL 판정에서 제외한다 (D-09).
 
@@ -142,7 +149,7 @@ def simulate_event(ticks: list[dict], slippage: float) -> dict | None:
 
         if state == "WAITING_ENTRY":
             drawdown = (tick["price"] - running_peak) / running_peak
-            if drawdown <= -ENTRY_DROP_PCT:               # D-02 -7% 눌림
+            if drawdown <= -strategy.entry_drop_pct:               # D-02 -7% 눌림
                 # D-04: 다음 틱 체결. 마지막 틱에서 충족 시 다음 틱 없음 -> 무진입
                 if sl.cursor + 1 >= len(ticks):
                     return None
@@ -158,7 +165,7 @@ def simulate_event(ticks: list[dict], slippage: float) -> dict | None:
             # D-09: 갭 틱은 TP/SL 돌파 판정 건너뜀 (running_peak 갱신은 위에서 이미 수행)
             if tick["gap_before"] != 1:
                 chg = (tick["price"] - entry["price"]) / entry["price"]
-                hit = "익절" if chg >= TP_PCT else ("손절" if chg <= -SL_PCT else None)
+                hit = "익절" if chg >= strategy.tp_pct else ("손절" if chg <= -strategy.sl_pct else None)
                 if hit and sl.cursor + 1 < len(ticks):    # D-07 다음 틱 체결
                     return _close(entry, ticks[sl.cursor + 1], slippage, hit)
 
@@ -333,8 +340,8 @@ def print_report(result: dict) -> None:
     print(f"대상 이벤트: {result['total_events']}건  "
           f"(제외: {result['excluded']}건 — 갭 오염 임계 초과)")
     print(f"추정 틱 경고: 평균 ts_estimated 비율 {result['avg_est_ratio'] * 100:.1f}%")
-    print(f"전략 상수: 진입 -{ENTRY_DROP_PCT * 100:.0f}%  "
-          f"TP +{TP_PCT * 100:.0f}%  SL -{SL_PCT * 100:.0f}%  "
+    print(f"전략 상수: 진입 -{DEFAULT_STRATEGY.entry_drop_pct * 100:.0f}%  "
+          f"TP +{DEFAULT_STRATEGY.tp_pct * 100:.0f}%  SL -{DEFAULT_STRATEGY.sl_pct * 100:.0f}%  "
           f"시간초과 {TIMEOUT_SEC}초")
     print(f"수수료(왕복): {ROUND_TRIP_FEE * 100:.2f}%")
     print()

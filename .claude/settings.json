@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:myip.co.kr)",
+      "WebFetch(domain:docs.cryptohopper.com)",
+      "WebFetch(domain:www.cryptohopper.com)",
+      "Bash(*)",
+      "PowerShell(*)"
+    ]
+  }
+}

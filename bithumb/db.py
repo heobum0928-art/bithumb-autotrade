@@ -117,11 +117,16 @@ def init_db() -> None:
     with _conn() as con:
         con.executescript(CREATE_SQL)
         for tbl, col, typ in [
-            ("trades",     "max_price",    "REAL"),
-            ("trades",     "max_pnl_pct",  "REAL"),
-            ("signal_log", "signal_price", "REAL"),
-            ("signal_log", "outcome_5m",   "REAL"),
-            ("signal_log", "outcome_30m",  "REAL"),
+            ("trades",     "max_price",      "REAL"),
+            ("trades",     "max_pnl_pct",    "REAL"),
+            ("trades",     "entry_chg24h",   "REAL"),
+            ("trades",     "claude_reason",  "TEXT"),
+            ("trades",     "entry_chg5m",    "REAL"),
+            ("trades",     "entry_btc_chg",  "REAL"),
+            ("trades",     "entry_n_pos",    "INTEGER"),
+            ("signal_log", "signal_price",   "REAL"),
+            ("signal_log", "outcome_5m",     "REAL"),
+            ("signal_log", "outcome_30m",    "REAL"),
         ]:
             try:
                 con.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}")
@@ -142,6 +147,11 @@ def log_trade(
     entered_at: datetime,
     exited_at: datetime,
     max_price: float = 0.0,
+    entry_chg24h: float | None = None,
+    claude_reason: str | None = None,
+    entry_chg5m: float | None = None,
+    entry_btc_chg: float | None = None,
+    entry_n_pos: int | None = None,
 ) -> None:
     pnl_krw = received_krw - cost_krw
     pnl_pct = pnl_krw / cost_krw * 100 if cost_krw else 0
@@ -160,14 +170,18 @@ def log_trade(
         exit_reason, hold_sec,
         entered_at.isoformat(), exited_at.isoformat(),
         max_price, max_pnl_pct,
+        entry_chg24h, claude_reason,
+        entry_chg5m, entry_btc_chg, entry_n_pos,
     )
     with _conn() as con:
         con.execute(
             """INSERT INTO trades
                (date,coin,market,entry_price,exit_price,volume,cost_krw,
                 received_krw,pnl_krw,pnl_pct,exit_reason,hold_seconds,
-                entered_at,exited_at,max_price,max_pnl_pct)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                entered_at,exited_at,max_price,max_pnl_pct,
+                entry_chg24h,claude_reason,
+                entry_chg5m,entry_btc_chg,entry_n_pos)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             row,
         )
     log.info(f"[DB] 거래 저장: {coin} PnL={pnl_krw:+,.0f}원 ({pnl_pct:+.2f}%) 최고={max_pnl_pct:+.1f}% [{exit_reason}]")
