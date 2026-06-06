@@ -187,3 +187,18 @@ class BithumbClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def get_daily_candles(self, market: str, count: int = 2) -> list[dict]:
+        """Get daily candles via /v1/candles/days. Returns newest-first.
+
+        idx[0] = today  — opening_price: 당일 시가
+        idx[1] = yesterday — high_price, low_price: 전일 고저폭 계산용
+        Public endpoint, no auth required.
+        Anti-pattern: get_candles(unit=1440) 사용 금지 — 빗썸 API 미지원.
+        """
+        resp = self._session.get(
+            f"{BASE_URL}/v1/candles/days",
+            params={"market": market.upper(), "count": count},
+        )
+        resp.raise_for_status()
+        return resp.json()
