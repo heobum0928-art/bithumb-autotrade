@@ -1,100 +1,92 @@
----
-phase: 4
-name: live-trading
-status: planning
-created: 2026-06-03
----
+# Phase 04: VB Trader — Context
 
-# Phase 04 — 실전 전환 컨텍스트
-
-## 목표
-
-2주 준비 기간 후 실거래 전환. 월 10만원(자본 대비 10%) 달성.
+**Phase goal:** 변동성 돌파(Volatility Breakout) 전략을 실전 단타 모듈로 구현한다.
+`scripts/vb_trader.py` 신규 스크립트, watchdog 통합, 즉시 실거래.
 
 ---
 
-## 확정된 결정사항
+## Decisions
 
-### 자본 및 목표
-| 항목 | 값 |
-|---|---|
-| 실전 자본 | 100만원 |
-| 월 목표 수익 | 10만원 (10%/월) |
-| 연환산 | 120% |
-| 근거 | 해외 전문가 기준 신규 상장 봇 유리한 달 5~15% 가능 |
+### 전략 파라미터 (고정)
 
-### 폐기된 전략
-| 전략 | 이유 |
-|---|---|
-| 빗썸 알트 모멘텀 단타 | EV 마이너스 구조적 확인 (687건) |
-| MA 스윙 (XLM/BTC) | 수익 불규칙 — 2024년 12월 한 방 의존, 100만원에서 월 4만원 |
-| 김프 차익거래 | 2024년 이후 역전, 사실상 사망 |
+| 파라미터 | 결정값 | 비고 |
+|---------|--------|------|
+| 목표가 공식 | 당일 시가 + 전일 고저폭 × K | |
+| K값 | **0.5** | 래리 윌리엄스 원래 설정 |
+| TP | **+3%** | 목표가 돌파 후 +3% |
+| SL | **-2%** | 진입가 대비 -2% |
+| 트레일링 | 없음 | TP/SL 고정 청산 |
+| 자정 강제 청산 | **00:00 KST** 미청산 포지션 시장가 청산 | 당일 전략 기준 초기화 |
+| 1회 진입금액 | **10만원** | alt_monitor와 별도 자본 |
 
-### 채택된 전략: 신규 상장 봇 (Primary)
-- **근거**: alt_monitor에 이미 구현됨 (`NEWLISTING_ENABLED = False`)
-- **실제 수익 기록**: SUNDOG +18,872원, DAO +14,096원, XION +13,483원
-- **엣지**: 신규 상장 초기 가격 발견의 비효율성 — HFT와 정면 경쟁 아님
-- **빗썸 특성**: 2025년 업비트 대비 3배 신규 상장 → 기회 빈도 높음
+### 대상 코인
 
-### 스윙 모니터 (Secondary)
-- swing_monitor.py 이미 구현됨, 매일 밤 10시 자동 체크
-- 신규 상장 봇이 무거래일 때 스윙 신호로 자본 보조 운용
-- XLM MA10/30 골든크로스 현재 진행 중
+- 일 거래량 **20억 KRW 이상** 코인만 대상 (alt_monitor의 볼륨필터 화이트리스트와 동일 기준)
+- 기존 `alt_monitor.py`의 볼륨 화이트리스트 갱신 로직 재활용 가능
+- 코인 목록은 매일 자정 갱신 (당일 거래량 기준)
 
----
+### 봇 구조
 
-## 2주 준비 계획
+- **완전 분리된 독립 프로세스** — `scripts/vb_trader.py`
+- 포지션 파일: `data/vb_pos.json` (alt_monitor의 `active_pos.json`과 별도)
+- 로그 파일: `logs/vb_trader.log`
+- watchdog `BOTS` dict에 `"vb_trader"` 항목 추가
+- 동일 코인 동시 진입 가능 (alt_monitor와 자본 독립)
 
-### Week 1 (6/3 ~ 6/10)
-- [ ] alt_monitor NEWLISTING_ENABLED = True 활성화
-- [ ] 신규 상장 TP/SL 파라미터 최적화 (기존 SUNDOG/DAO/XION 패턴 분석)
-- [ ] 모의투자 병행 — 신규 상장 감지 시 텔레그램 알림으로 수동 확인
+### 데이터 소스
 
-### Week 2 (6/10 ~ 6/17)
-- [ ] 모의 성과 검토
-- [ ] 실전 전환 기준 충족 여부 확인
-- [ ] 100만원 실거래 투입
+- **당일 시가**: `BithumbClient.get_candles(market, unit=1440, count=2)` 240분 캔들 or 일봉 — 없으면 KST 00:00 이후 첫 웹소켓 체결가
+- **전일 고저폭**: API 일봉 캔들 `high - low` (전일 기준)
+- 실시간 가격: 웹소켓 (alt_monitor PriceTracker 패턴 재활용)
 
----
+### 실거래 여부
 
-## 실전 전환 GO 기준
+- **모의투자 먼저** — `--dry-run` 플래그로 시작, 실제 주문 없이 신호/수익률 확인
+- 충분한 검증 후 `--live` 플래그로 실전 전환 (사용자 명시 확인 필요)
+- DB에는 `[VB-DRY]` 태그로 기록 (기존 CS-DRY 패턴과 동일)
 
-다음 중 하나 충족 시 실전 전환:
-1. 2주 모의에서 신규 상장 감지 3건 이상 + EV 플러스
-2. 또는 2주 경과 후 무조건 전환 (신규 상장 데이터는 모의로 충분히 검증 불가)
+### DB 기록
+
+- 기존 `trades` 테이블에 기록 (`exit_reason` 에 `[VB]` 태그)
+- `log_trade()` 함수 재활용
 
 ---
 
-## 리스크 관리 규칙
+## 재활용 가능 코드 자산
 
-| 항목 | 규칙 |
-|---|---|
-| 1회 진입 금액 | 100만원의 20% = 20만원 |
-| 최대 동시 포지션 | 3개 |
-| TP | +10% |
-| SL | -5% |
-| 일일 손실 한도 | -10만원 (하루 손실 이 이상이면 당일 중단) |
-| 월 손실 한도 | -20만원 (자본의 20%) |
-
----
-
-## 현실적 기대치
-
-| 시나리오 | 월 수익 |
-|---|---|
-| 좋은 달 (신규 상장 3~5건, 높은 승률) | +10~15만원 |
-| 보통 달 (신규 상장 1~2건) | +3~7만원 |
-| 나쁜 달 (신규 상장 없음) | 0 ~ -2만원 |
-| 목표 달성 가능성 | 월 평균 5~8만원 현실적 |
+| 자산 | 위치 | 재활용 방식 |
+|------|------|------------|
+| `BithumbClient` | `bithumb/client.py` | market_buy, market_sell, get_candles |
+| `log_trade()` | `bithumb/db.py` | 그대로 호출 |
+| `send()` (TG 알림) | `bithumb/notify.py` | 진입/청산 알림 |
+| 볼륨 화이트리스트 로직 | `alt_monitor.py` ~L900 | 20억+ 코인 필터 패턴 |
+| PriceTracker WebSocket | `alt_monitor.py` | 실시간 가격 구독 구조 참고 |
+| `watchdog.py` BOTS dict | `scripts/watchdog.py` L36-42 | `"vb_trader"` 항목 추가 |
 
 ---
 
-## 다음 단계
+## 제약
 
-1. `/gsd:plan-phase` — Phase 04 실행 계획 수립
-2. 신규 상장 파라미터 최적화
-3. 실전 전환 인프라 점검
+- config.yaml API 키 git 커밋 금지
+- 매매 코드 변경 시 사용자 검토 후 커밋
+- 기존 OVERSOLD 파라미터 동결(~2026-06-22) 미영향 — 완전 별개 전략
+- `claude_screener_dry` watchdog 제거는 이 phase와 함께 처리
 
 ---
-*Context created: 2026-06-03*
-*Based on: 687건 단타 백테스트, 4000일 스윙 백테스트, 해외 10개 소스 리서치*
+
+## 스코프 외 (미포함)
+
+- 백테스트 검증 없이 실전 투입 (사용자 결정)
+- 그리드 매매, BB스퀴즈 등 다른 전략 (별도 phase)
+- 멀티 포지션 (1코인 1포지션)
+
+---
+
+## canonical_refs
+
+- `scripts/alt_monitor.py` — 봇 구조, WS, 볼륨 필터 패턴
+- `bithumb/client.py` — API 메서드 시그니처
+- `bithumb/db.py` — log_trade() 시그니처
+- `bithumb/notify.py` — TG 알림 패턴
+- `scripts/watchdog.py` — BOTS dict, EXTRA_ARGS 패턴
+- `config.yaml` (로컬) — trading 섹션에 `vb_trader.live` 추가 필요
