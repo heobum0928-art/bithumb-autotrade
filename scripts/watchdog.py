@@ -75,7 +75,7 @@ KILL_KEYWORDS: dict[str, str] = {
 
 def kill_existing(name: str) -> None:
     extra_kw = KILL_KEYWORDS.get(name)
-    script_kw = f"{name}.py" if not extra_kw else "claude_screener.py"
+    script_kw = "claude_screener.py" if "screener" in name else f"{name}.py"
     for p in psutil.process_iter(["pid", "cmdline"]):
         try:
             parts = p.info["cmdline"] or []
