@@ -36,7 +36,6 @@ CHECK_INTERVAL = 30  # 초마다 프로세스 확인
 BOTS = {
     "alt_monitor":           ROOT / "scripts" / "alt_monitor.py",
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
-    "claude_screener_dry":   ROOT / "scripts" / "claude_screener.py",  # 페이퍼 트레이딩
     "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
 }

@@ -41,8 +41,9 @@
 
 ### 실거래 여부
 
-- **즉시 실전** — RECORD_ONLY 게이트 **통과** (config.yaml `trading.record_only` 무시, 별도 플래그 `vb_live: true` 사용)
-- 단, config.yaml에 `vb_trader.live: true` 명시 필요 — 미설정 시 dry 동작 (안전 기본값)
+- **모의투자 먼저** — `--dry-run` 플래그로 시작, 실제 주문 없이 신호/수익률 확인
+- 충분한 검증 후 `--live` 플래그로 실전 전환 (사용자 명시 확인 필요)
+- DB에는 `[VB-DRY]` 태그로 기록 (기존 CS-DRY 패턴과 동일)
 
 ### DB 기록
 
