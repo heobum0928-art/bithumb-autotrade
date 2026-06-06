@@ -72,8 +72,8 @@
   4. TP+3% 또는 SL-2% 달성 시 청산되고 trades DB에 [VB-DRY] 태그로 기록된다
   5. watchdog 실행 시 vb_trader가 --dry-run 인자로 자동 시작·재시작된다
 **Plans**: 3 plans
-- [ ] 04-01-PLAN.md — BithumbClient.get_daily_candles() 추가 + vb_trader.py 골격 (상수, 로깅, 단일인스턴스, 볼륨 화이트리스트)
-- [ ] 04-02-PLAN.md — 메인 루프: PriceTracker, VB 목표가 계산, 모의 진입/청산 상태 머신, DB 기록
+- [x] 04-01-PLAN.md — BithumbClient.get_daily_candles() 추가 + vb_trader.py 골격 (상수, 로깅, 단일인스턴스, 볼륨 화이트리스트)
+- [x] 04-02-PLAN.md — 메인 루프: PriceTracker, VB 목표가 계산, 모의 진입/청산 상태 머신, DB 기록
 - [ ] 04-03-PLAN.md — watchdog 통합 (BOTS + EXTRA_ARGS) + docs/STRATEGY.md 파라미터 이력 기록
 
 ---
@@ -85,7 +85,7 @@
 | 1. Tick Recording Infrastructure | 0/3 | Not started | - |
 | 2. Backtest Engine | 3/3 | Complete   | 2026-05-19 |
 | 3. Strategy Validation | 0/3 | Not started | - |
-| 4. VB Trader Dry Run | 0/3 | Planning | - |
+| 4. VB Trader Dry Run | 2/3 | In Progress|  |
 
 ---
 
