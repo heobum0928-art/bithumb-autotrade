@@ -11,6 +11,7 @@
 - [ ] **Phase 1: Tick Recording Infrastructure** - 봇을 기록 전용 모드로 전환 + 초 단위 틱 DB 수집 시작 (실거래 차단 확인 후 2~3주 운영)
 - [x] **Phase 2: Backtest Engine** - 틱 데이터를 시간순 재생해 전략을 시뮬레이션하는 독립 오프라인 엔진 제작 (Phase 1 운영 기간 중 병행 개발 가능) (completed 2026-05-19)
 - [ ] **Phase 3: Strategy Validation** - 충분한 틱 데이터로 out-of-sample 검증 사이클을 돌려 EV 양수/음수 GO/NO-GO 결론 도출
+- [ ] **Phase 4: VB Trader Dry Run** - 변동성 돌파 전략(K=0.5, TP+3%, SL-2%)을 모의투자로 먼저 검증하는 독립 스크립트 구현
 
 ---
 
@@ -60,6 +61,21 @@
 - [ ] 03-02-PLAN.md — validate.py: EventSplit train/test 분할 배리어 + 36조합 그리드 서치
 - [ ] 03-03-PLAN.md — validate.py: OOS 검증 + 코인/시간대 분해 + GO/NO-GO 판정 + 리포트
 
+### Phase 4: VB Trader Dry Run
+**Goal**: 변동성 돌파(K=0.5) 전략을 scripts/vb_trader.py로 구현하고 --dry-run 모의투자 모드로 watchdog에 통합한다
+**Depends on**: Nothing (독립 전략 — Phase 1~3과 자본/코드 분리)
+**Requirements**: VB-01, VB-02, VB-03, VB-04, VB-05
+**Success Criteria** (what must be TRUE):
+  1. python scripts/vb_trader.py --dry-run 실행 시 포트 47220을 바인딩하고 볼륨 화이트리스트 로그가 출력된다
+  2. VB 목표가(당일시가 + 전일고저폭×0.5)가 일봉 캔들 API로 정확히 계산된다
+  3. 목표가 돌파 시 모의 진입 로그가 출력되고 data/vb_pos.json이 생성된다
+  4. TP+3% 또는 SL-2% 달성 시 청산되고 trades DB에 [VB-DRY] 태그로 기록된다
+  5. watchdog 실행 시 vb_trader가 --dry-run 인자로 자동 시작·재시작된다
+**Plans**: 3 plans
+- [ ] 04-01-PLAN.md — BithumbClient.get_daily_candles() 추가 + vb_trader.py 골격 (상수, 로깅, 단일인스턴스, 볼륨 화이트리스트)
+- [ ] 04-02-PLAN.md — 메인 루프: PriceTracker, VB 목표가 계산, 모의 진입/청산 상태 머신, DB 기록
+- [ ] 04-03-PLAN.md — watchdog 통합 (BOTS + EXTRA_ARGS) + docs/STRATEGY.md 파라미터 이력 기록
+
 ---
 
 ## Progress
@@ -69,6 +85,7 @@
 | 1. Tick Recording Infrastructure | 0/3 | Not started | - |
 | 2. Backtest Engine | 3/3 | Complete   | 2026-05-19 |
 | 3. Strategy Validation | 0/3 | Not started | - |
+| 4. VB Trader Dry Run | 0/3 | Planning | - |
 
 ---
 
@@ -79,7 +96,8 @@ Phase 1과 Phase 2는 **병행 개발** 가능하다.
 - Phase 1은 완료 즉시 봇을 기록 전용으로 재시작해 틱 축적을 시작한다.
 - Phase 2는 Phase 1 스키마가 확정되면 개발 시작 가능하며, 실세계 2~3주 데이터 축적 기간 동안 병행한다.
 - Phase 3은 Phase 1의 충분한 틱(최소 표본 기준 충족)과 Phase 2 엔진이 모두 준비된 후 시작한다.
+- Phase 4는 Phase 1~3과 독립적으로 병행 가능하다 (별도 자본, 별도 전략, 별도 프로세스).
 
 ---
 *Roadmap created: 2026-05-19*
-*Last updated: 2026-05-19 after Phase 2 planning*
+*Last updated: 2026-06-06 after Phase 4 planning*
