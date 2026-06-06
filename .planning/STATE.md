@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: complete
-last_updated: "2026-05-19T07:00:00.000Z"
+milestone: v2.0
+milestone_name: vb-live-trading
+status: in_progress
+last_updated: "2026-06-06T03:06:21Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  total_plans: 12
+  completed_plans: 10
+  percent: 25
 ---
 
 # Project State: 빗썸 펌핑 단타봇 — 검증 체계 전환
@@ -18,7 +18,7 @@ progress:
 
 **Core Value:** 검증되지 않은 전략에는 실제 돈을 넣지 않는다 — 데이터 → 백테스트 → 검증 통과한 것만 실거래로 간다
 
-**Current Focus:** Phase 03 완료 — 전체 마일스톤 실행 완료 (검증 대기)
+**Current Focus:** Phase 04 실행 중 — Plan 01 완료 (VB Trader 골격), Plan 02 착수 예정 (메인 루프)
 
 ---
 
@@ -26,15 +26,15 @@ progress:
 
 | Field | Value |
 |-------|-------|
-| Milestone | 검증 체계 전환 |
-| Current Phase | 3 — Strategy Validation |
-| Current Plan | 3 of 3 (all plans complete) |
-| Phase Status | Ready for verification |
-| Overall Progress | 3/3 phases complete (9/9 plans) |
+| Milestone | VB Live Trading |
+| Current Phase | 4 — Live Trading (VB Trader) |
+| Current Plan | 1 of 3 complete (Plan 02 next) |
+| Phase Status | In progress |
+| Overall Progress | Phase 4 Plan 1/3 (04-01 done) |
 
 ```
-Progress: [██████████] 100%
-Phase 1: [✓] Phase 2: [✓] Phase 3: [✓]
+Progress: [███░░░░░░░] 25% (Phase 4 in progress)
+Phase 1: [✓] Phase 2: [✓] Phase 3: [✓] Phase 4: [1/3]
 ```
 
 ---
@@ -43,9 +43,10 @@ Phase 1: [✓] Phase 2: [✓] Phase 3: [✓]
 
 | Phase | Goal | Status |
 |-------|------|--------|
-| 1 — Tick Recording Infrastructure | 봇 실거래 차단 + 초 단위 틱 DB 축적 시작 | Complete (verification pending) |
-| 2 — Backtest Engine | 틱 재생 기반 독립 시뮬레이션 엔진 | Complete (verification pending) |
-| 3 — Strategy Validation | Train/test 분할 OOS 검증 + GO/NO-GO 판정 | Complete (verification pending) |
+| 1 — Tick Recording Infrastructure | 봇 실거래 차단 + 초 단위 틱 DB 축적 시작 | Complete |
+| 2 — Backtest Engine | 틱 재생 기반 독립 시뮬레이션 엔진 | Complete |
+| 3 — Strategy Validation | Train/test 분할 OOS 검증 + GO/NO-GO 판정 | Complete |
+| 4 — Live Trading (VB Trader) | 변동성 돌파 전략 실전 구현 + watchdog 통합 | In progress (Plan 1/3) |
 
 ---
 
@@ -68,6 +69,8 @@ Phase 1: [✓] Phase 2: [✓] Phase 3: [✓]
 | 다음 틱(cursor+1) 체결 강제 | 진입/청산 모두 다음 틱 price 사용 — lookahead bias 차단, 갭 틱 TP/SL 판정 제외 (02-02) | 2026-05-19 |
 | MDD 누적손익 단순합 모델 채택 | 복리 아님 — Python 학습 중 사용자에게 투명한 for-loop 유지 (02-03) | 2026-05-19 |
 | 지표는 stdlib statistics만 사용 | 정규근사 95% CI(Z_95=1.96), pstdev 금지(표본표준편차), scipy 의존 없음 (02-03) | 2026-05-19 |
+| get_daily_candles → /v1/candles/days | unit=1440 분봉 방식 사용 금지 — 빗썸 API 미지원, 일봉 전용 엔드포인트 사용 (04-01) | 2026-06-06 |
+| vb_trader 포트 47220 | alt_monitor(47219) 포트 충돌 방지 — 독립 프로세스 보장 (04-01) | 2026-06-06 |
 
 ### Known Constraints
 
@@ -97,9 +100,10 @@ Phase 1: [✓] Phase 2: [✓] Phase 3: [✓]
 
 ## Session Continuity
 
-**Last session:** 2026-05-19T07:00:00.000Z
-**Next action:** `/gsd:verify-phase 3` — Strategy Validation 검증 (모든 플랜 완료, 틱 데이터 축적 대기)
+**Last session:** 2026-06-06T03:06:21Z
+**Stopped at:** Completed 04-01-PLAN.md (get_daily_candles + vb_trader.py skeleton)
+**Next action:** Execute 04-02-PLAN.md — VB Trader 메인 루프 (진입/청산 로직)
 
 ---
 *State initialized: 2026-05-19*
-*Last updated: 2026-05-19 after roadmap creation*
+*Last updated: 2026-06-06 after 04-01 execution*
