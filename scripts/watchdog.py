@@ -38,6 +38,7 @@ BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
+    "vb_trader":             ROOT / "scripts" / "vb_trader.py",        # VB 전략 dry-run
 }
 
 
@@ -61,12 +62,14 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "claude_screener_dry":   ["--dry-run"],
     "claude_screener_watch": ["--watch-mode"],
     "swing_monitor":         ["--loop"],
+    "vb_trader":             ["--dry-run"],   # 모의투자 모드로 시작
 }
 
 # 인스턴스 식별용 kill 키워드 매핑
 KILL_KEYWORDS: dict[str, str] = {
     "claude_screener_dry":   "--dry-run",
     "claude_screener_watch": "--watch-mode",
+    "vb_trader":             "--dry-run",    # vb_trader.py --dry-run 프로세스 식별용
 }
 
 

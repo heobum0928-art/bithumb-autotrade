@@ -200,3 +200,25 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 - [ ] 과매도 반등: pump_log 이벤트 기반 후보 교체 (Step 5)
 - [ ] IMMEDIATE_ENTRY_COINS 확장 기준 데이터화 (META, WNCG 외 후보)
 - [ ] COIN_BLACKLIST 자동 갱신 로직 (주간 실거래 PnL 기반)
+
+---
+
+## VB 전략 파라미터 (scripts/vb_trader.py)
+
+*신규 도입: 2026-06-06 — Phase 04 (VB Trader Dry Run)*
+
+| 날짜 | 파일 | 파라미터 | 이전값 | 현재값 | 변경 이유 |
+|------|------|---------|--------|--------|----------|
+| 2026-06-06 | vb_trader.py 신규 | K (VB 배수) | - | 0.5 | 래리 윌리엄스 VB 전략 표준값 |
+| 2026-06-06 | vb_trader.py 신규 | TP | - | +3% | 모의투자 검증용 보수적 목표 |
+| 2026-06-06 | vb_trader.py 신규 | SL | - | -2% | alt_monitor OVERSOLD_SL_PCT와 동일 기준 |
+| 2026-06-06 | vb_trader.py 신규 | VB_ENTRY_KRW | - | 100,000원 | alt_monitor와 별도 자본, 모의투자 고정 |
+| 2026-06-06 | vb_trader.py 신규 | 진입 기준 | - | 당일시가 + 전일범위×0.5 돌파 | /v1/candles/days API 확인 |
+| 2026-06-06 | vb_trader.py 신규 | 대상 코인 | - | 24h 거래대금 20억+ | 볼륨 화이트리스트, 자정 갱신 |
+| 2026-06-06 | vb_trader.py 신규 | 자정 강제청산 | - | 00:00 KST | 당일 전략 초기화 |
+| 2026-06-06 | vb_trader.py 신규 | 실행모드 | - | --dry-run (모의투자) | watchdog EXTRA_ARGS로 자동 적용 |
+
+### 동결 파라미터와의 관계
+- vb_trader.py는 alt_monitor.py의 OVERSOLD 전략과 **완전히 별개**다.
+- OVERSOLD 파라미터 동결(~2026-06-22)은 vb_trader에 미적용.
+- 두 봇은 자본 독립 (vb_trader 고정 10만원 별도 운용).
