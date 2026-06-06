@@ -164,14 +164,18 @@ LOCKFILE = ROOT / "data" / "watchdog.pid"
 
 
 def main() -> None:
-    # 워치독 중복 실행 방지
-    if LOCKFILE.exists():
+    # 기존 워치독 프로세스 모두 종료 후 인수인계 (중복 재시작 루프 방지)
+    for p in psutil.process_iter(["pid", "cmdline"]):
         try:
-            old_pid = int(LOCKFILE.read_text())
-            if psutil.pid_exists(old_pid):
-                log.error(f"워치독 이미 실행 중 (PID={old_pid}). 종료합니다.")
-                sys.exit(1)
-        except (ValueError, OSError):
+            parts = p.info["cmdline"] or []
+            if any(str(c).endswith("watchdog.py") for c in parts) and p.pid != os.getpid():
+                log.warning(f"기존 워치독 PID {p.pid} 종료")
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except psutil.TimeoutExpired:
+                    p.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     LOCKFILE.write_text(str(os.getpid()))
     atexit.register(lambda: LOCKFILE.unlink(missing_ok=True))
