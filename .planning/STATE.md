@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Completed 04-02-PLAN.md (checkpoint:human-verify)"
-last_updated: "2026-06-06T03:11:14.553Z"
+stopped_at: "Completed 04-03-PLAN.md"
+last_updated: "2026-06-06T03:16:12Z"
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
-  percent: 25
+  completed_plans: 12
+  percent: 80
 ---
 
 # Project State: 빗썸 펌핑 단타봇 — 검증 체계 전환
@@ -29,13 +29,13 @@ progress:
 |-------|-------|
 | Milestone | VB Live Trading |
 | Current Phase | 4 — Live Trading (VB Trader) |
-| Current Plan | 1 of 3 complete (Plan 02 next) |
-| Phase Status | In progress |
-| Overall Progress | Phase 4 Plan 1/3 (04-01 done) |
+| Current Plan | 3 of 3 complete (Phase 04 done) |
+| Phase Status | Complete |
+| Overall Progress | Phase 4 all 3 plans done |
 
 ```
-Progress: [███░░░░░░░] 25% (Phase 4 in progress)
-Phase 1: [✓] Phase 2: [✓] Phase 3: [✓] Phase 4: [1/3]
+Progress: [████████░░] 80% (Phase 4 complete)
+Phase 1: [✓] Phase 2: [✓] Phase 3: [✓] Phase 4: [✓]
 ```
 
 ---
@@ -47,7 +47,7 @@ Phase 1: [✓] Phase 2: [✓] Phase 3: [✓] Phase 4: [1/3]
 | 1 — Tick Recording Infrastructure | 봇 실거래 차단 + 초 단위 틱 DB 축적 시작 | Complete |
 | 2 — Backtest Engine | 틱 재생 기반 독립 시뮬레이션 엔진 | Complete |
 | 3 — Strategy Validation | Train/test 분할 OOS 검증 + GO/NO-GO 판정 | Complete |
-| 4 — Live Trading (VB Trader) | 변동성 돌파 전략 실전 구현 + watchdog 통합 | In progress (Plan 1/3) |
+| 4 — Live Trading (VB Trader) | 변동성 돌파 전략 실전 구현 + watchdog 통합 | Complete (3/3 plans) |
 
 ---
 
@@ -72,6 +72,8 @@ Phase 1: [✓] Phase 2: [✓] Phase 3: [✓] Phase 4: [1/3]
 | 지표는 stdlib statistics만 사용 | 정규근사 95% CI(Z_95=1.96), pstdev 금지(표본표준편차), scipy 의존 없음 (02-03) | 2026-05-19 |
 | get_daily_candles → /v1/candles/days | unit=1440 분봉 방식 사용 금지 — 빗썸 API 미지원, 일봉 전용 엔드포인트 사용 (04-01) | 2026-06-06 |
 | vb_trader 포트 47220 | alt_monitor(47219) 포트 충돌 방지 — 독립 프로세스 보장 (04-01) | 2026-06-06 |
+| vb_trader watchdog --dry-run | EXTRA_ARGS에 --dry-run 등록 — watchdog 재시작 후에도 모의투자 모드 강제 유지 (04-03) | 2026-06-06 |
+| VB STRATEGY.md 별도 섹션 | OVERSOLD 동결 섹션과 분리 — 동결 규칙 미혼동, 완전 별개 전략 명시 (04-03) | 2026-06-06 |
 
 ### Known Constraints
 
@@ -101,10 +103,10 @@ Phase 1: [✓] Phase 2: [✓] Phase 3: [✓] Phase 4: [1/3]
 
 ## Session Continuity
 
-**Last session:** 2026-06-06T03:11:14.550Z
-**Stopped at:** Completed 04-02-PLAN.md (checkpoint:human-verify)
-**Next action:** Execute 04-02-PLAN.md — VB Trader 메인 루프 (진입/청산 로직)
+**Last session:** 2026-06-06T03:16:12Z
+**Stopped at:** Completed 04-03-PLAN.md
+**Next action:** Phase 04 complete — vb_trader.py running in dry-run mode via watchdog. Monitor dry-run results before Phase 05.
 
 ---
 *State initialized: 2026-05-19*
-*Last updated: 2026-06-06 after 04-01 execution*
+*Last updated: 2026-06-06 after 04-03 execution*
