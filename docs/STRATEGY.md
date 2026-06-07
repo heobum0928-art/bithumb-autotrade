@@ -222,3 +222,12 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 - vb_trader.py는 alt_monitor.py의 OVERSOLD 전략과 **완전히 별개**다.
 - OVERSOLD 파라미터 동결(~2026-06-22)은 vb_trader에 미적용.
 - 두 봇은 자본 독립 (vb_trader 고정 10만원 별도 운용).
+
+---
+
+## Claude Intelligence (CID) 변경 이력 (scripts/claude_intelligence.py)
+
+| 날짜 | 파일 | 파라미터 | 이전값 | 현재값 | 변경 이유 |
+|------|------|---------|--------|--------|----------|
+| 2026-06-07 | claude_intelligence.py | Judge LLM | Haiku | Sonnet 4.6 | 최종 판단 품질 향상 — QuantAgent 비용최적화 패턴 적용 |
+| 2026-06-07 | claude_intelligence.py | confidence 기반 진입금액 | 고정 20만원 | confidence≥7→20만원, <7→10만원 | Judge 확신도 낮으면 소액 진입, 손실 제한 |

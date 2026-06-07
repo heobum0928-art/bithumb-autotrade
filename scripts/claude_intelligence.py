@@ -176,9 +176,19 @@ def collect_market_data(client: BithumbClient) -> str:
 
 
 def _run_claude(prompt: str) -> str:
-    """Claude CLI 호출 후 텍스트 반환."""
+    """Claude CLI 호출 후 텍스트 반환 (Haiku — Bull/Bear용)."""
     result = subprocess.run(
         ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
+        capture_output=True, text=True, encoding="utf-8",
+        timeout=CLAUDE_TIMEOUT,
+    )
+    return result.stdout.strip()
+
+
+def _run_claude_sonnet(prompt: str) -> str:
+    """Claude Sonnet 호출 — Judge 최종 판단 전용."""
+    result = subprocess.run(
+        ["claude", "--model", "claude-sonnet-4-6", "-p", prompt],
         capture_output=True, text=True, encoding="utf-8",
         timeout=CLAUDE_TIMEOUT,
     )
@@ -259,13 +269,15 @@ def ask_claude_debate(market_data: str) -> dict:
 두 의견을 종합해서 최종 결정을 내려라.
 리스크가 "{bear_json.get('risk_level', '중간')}"이고 핵심 리스크는 "{bear_json.get('main_risk', '')}"다.
 
+confidence는 매수 확신도 (0=완전 불확실, 10=완전 확신). 7 이상만 매수 권장.
+
 JSON만 응답:
-{{"action": "buy", "coin": "심볼", "tp_pct": 8, "sl_pct": 4, "reason": "최종 판단 한 줄"}}
+{{"action": "buy", "coin": "심볼", "tp_pct": 8, "sl_pct": 4, "confidence": 8, "reason": "최종 판단 한 줄"}}
 또는
-{{"action": "wait", "reason": "한 줄 이유"}}"""
+{{"action": "wait", "confidence": 3, "reason": "한 줄 이유"}}"""
 
     try:
-        judge_text = _run_claude(judge_prompt)
+        judge_text = _run_claude_sonnet(judge_prompt)
         log.info(f"[CI][Judge] {judge_text[:120]}")
         final = _extract_json(judge_text)
         if final:
@@ -403,13 +415,18 @@ def run() -> None:
             time.sleep(CHECK_INTERVAL)
             continue
 
-        coin    = decision.get("coin", "").upper()
-        tp_pct  = float(decision.get("tp_pct", 8))
-        sl_pct  = float(decision.get("sl_pct", 4))
+        coin       = decision.get("coin", "").upper()
+        tp_pct     = float(decision.get("tp_pct", 8))
+        sl_pct     = float(decision.get("sl_pct", 4))
+        confidence = float(decision.get("confidence", 5))
 
         if not coin:
             log.warning("coin 없음 — 스킵")
             continue
+
+        # confidence 기반 진입금액 결정 (7 미만 → 10만원, 7 이상 → 20만원)
+        entry_krw = ENTRY_KRW if confidence >= 7 else ENTRY_KRW // 2
+        log.info(f"[CI] confidence={confidence:.0f} → 진입금액 {entry_krw:,}원")
 
         # 4. 진입
         price = get_current_price(client, coin)
@@ -417,13 +434,13 @@ def run() -> None:
             log.warning(f"{coin} 가격 0 — 스킵")
             continue
 
-        volume  = ENTRY_KRW / price
+        volume  = entry_krw / price
         new_pos = {
             "coin":        coin,
             "market":      f"KRW-{coin}",
             "entry_price": price,
             "volume":      volume,
-            "cost_krw":    ENTRY_KRW,
+            "cost_krw":    entry_krw,
             "entered_at":  datetime.now(KST).isoformat(),
             "highest":     price,
             "be_active":   False,
@@ -436,9 +453,10 @@ def run() -> None:
         save_state(state)
 
         log.info(f"[CI {coin}] 진입 @{price:,.1f}원 "
-                 f"TP+{tp_pct:.0f}% SL-{sl_pct:.0f}% | {reason}")
+                 f"TP+{tp_pct:.0f}% SL-{sl_pct:.0f}% conf={confidence:.0f} {entry_krw:,}원 | {reason}")
         _send_tg(f"🤖 <b>[CI {_MODE}] {coin} 진입</b>\n"
                  f"@{price:,.1f}원 | TP+{tp_pct:.0f}% SL-{sl_pct:.0f}%\n"
+                 f"확신도: {confidence:.0f}/10 ({entry_krw:,}원)\n"
                  f"이유: {reason}")
 
         time.sleep(CHECK_INTERVAL)
