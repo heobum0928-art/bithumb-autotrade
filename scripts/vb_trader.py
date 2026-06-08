@@ -91,6 +91,7 @@ SCAN_SEC             = 2               # 가격 스캔 주기 (초)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 1.0             # WS 재연결 최소 대기 (초)
 POS_PATH             = Path("data/vb_pos.json")
+ENTERED_PATH         = Path("data/vb_entered.json")
 
 # ── 볼륨 화이트리스트 ─────────────────────────────────────────────────────────
 def _build_volume_whitelist(client: BithumbClient) -> set[str]:
@@ -125,6 +126,28 @@ def save_pos(pos: dict | None) -> None:
         POS_PATH.unlink(missing_ok=True)
     else:
         POS_PATH.write_text(json.dumps(pos, default=str), encoding="utf-8")
+
+
+def load_entered() -> set[str]:
+    """당일 진입 완료 코인 목록 로드. 날짜가 오늘이 아니면 빈 셋 반환."""
+    try:
+        if not ENTERED_PATH.exists():
+            return set()
+        data = json.loads(ENTERED_PATH.read_text(encoding="utf-8"))
+        if data.get("date") != date.today().isoformat():
+            return set()
+        return set(data.get("coins", []))
+    except Exception:
+        return set()
+
+
+def save_entered(entered: set[str]) -> None:
+    """당일 진입 완료 코인 목록 저장."""
+    ENTERED_PATH.parent.mkdir(exist_ok=True)
+    ENTERED_PATH.write_text(
+        json.dumps({"date": date.today().isoformat(), "coins": list(entered)}),
+        encoding="utf-8",
+    )
 
 # ── 거래소 타임스탬프 파싱 ─────────────────────────────────────────────────────
 def _parse_exchange_ts(date_s: str, time_s: str) -> float | None:
@@ -313,7 +336,7 @@ def run() -> None:
 
     whitelist: set[str]       = set()
     vb_targets: dict[str, float] = {}   # coin -> vb_target
-    entered_coins: set[str]   = set()   # 당일 진입 완료 코인 (중복 방지, 자정 초기화)
+    entered_coins: set[str]   = load_entered()  # 재시작해도 당일 진입 이력 유지
 
     pos: dict | None = load_pos()
     today            = date.today()
@@ -334,9 +357,15 @@ def run() -> None:
     else:
         log.warning("[VB] 화이트리스트가 비어 있음 — WebSocket 구독 없음")
 
+    # 기존 포지션 코인은 entered_coins에 등록 (재시작 후 중복 진입 방지)
+    if pos is not None and pos["coin"] not in entered_coins:
+        entered_coins.add(pos["coin"])
+        save_entered(entered_coins)
+
     log.info(
         f"[VB] 시작 완료 | 모드={'DRY-RUN' if _DRY_RUN else 'LIVE'} "
         f"| 코인={len(whitelist)}개 | 포지션={'있음: '+pos['coin'] if pos else '없음'}"
+        f"| 오늘 진입완료: {entered_coins}"
     )
 
     while True:
@@ -348,6 +377,7 @@ def run() -> None:
                 today = date.today()
                 midnight_cleared = False
                 entered_coins.clear()
+                save_entered(entered_coins)
                 log.info("[VB] 날짜 교체 — 화이트리스트/VB목표가 재계산")
                 whitelist = _build_volume_whitelist(client)
                 vb_targets.clear()
@@ -421,6 +451,7 @@ def run() -> None:
                     }
                     save_pos(pos)
                     entered_coins.add(coin)
+                    save_entered(entered_coins)
                     log.warning(
                         f"[{coin}] [{_LOG_TAG}] 목표가 돌파! "
                         f"목표={target:,.0f} 현재={current:,.0f}원 → {'모의' if _DRY_RUN else '실거래'} 진입"
