@@ -331,14 +331,19 @@ def monitor_position(client: BithumbClient, state: dict) -> bool:
     if exit_reason:
         if _LIVE:
             try:
+                # 매도 전 KRW 잔고 기록 (delta 계산용)
+                pre_accounts = client.get_accounts()
+                krw_before = next((float(a["balance"]) for a in pre_accounts if a["currency"] == "KRW"), 0.0)
                 order = client.market_sell(f"KRW-{coin}", pos["volume"])
                 log.info(f"[CI {coin}] 실거래 매도 주문: {order.get('uuid')}")
                 time.sleep(1)
                 accounts = client.get_accounts()
-                recv = next((float(a["balance"]) for a in accounts if a["currency"] == "KRW"), exit_price * pos["volume"])
+                krw_after = next((float(a["balance"]) for a in accounts if a["currency"] == "KRW"), 0.0)
+                recv = krw_after - krw_before  # 실제 수령 금액만
             except Exception as e:
-                log.error(f"[CI {coin}] 매도 실패: {e}")
-                recv = exit_price * pos["volume"]
+                log.error(f"[CI {coin}] 매도 실패 — 포지션 유지: {e}")
+                save_state(state)
+                return False  # 포지션 유지, 다음 체크에서 재시도
         else:
             recv = exit_price * pos["volume"]
 
@@ -448,11 +453,18 @@ def run() -> None:
 
         if _LIVE:
             try:
+                # 매수 전 보유 수량 기록 (delta 계산용)
+                pre_accounts = client.get_accounts()
+                vol_before = next((float(a["balance"]) for a in pre_accounts if a["currency"] == coin), 0.0)
                 order = client.market_buy(f"KRW-{coin}", entry_krw)
                 log.info(f"[CI {coin}] 실거래 매수 주문: {order.get('uuid')}")
                 time.sleep(1)
                 accounts = client.get_accounts()
-                volume = next((float(a["balance"]) for a in accounts if a["currency"] == coin), entry_krw / price)
+                vol_after = next((float(a["balance"]) for a in accounts if a["currency"] == coin), 0.0)
+                volume = vol_after - vol_before  # 실제 체결 수량만
+                if volume <= 0:
+                    log.error(f"[CI {coin}] 체결 수량 0 — 스킵")
+                    continue
             except Exception as e:
                 log.error(f"[CI {coin}] 매수 실패: {e}")
                 continue
@@ -472,7 +484,7 @@ def run() -> None:
             "sl_pct":      sl_pct,
             "reason":      reason,
         }
-        state["balance"]  -= ENTRY_KRW
+        state["balance"]  -= entry_krw  # 실제 사용 금액으로 차감
         state["position"] = new_pos
         save_state(state)
 
