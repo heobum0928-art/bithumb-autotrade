@@ -32,7 +32,7 @@ CI_STATE_PATH   = Path("data/claude_ci_state.json")
 CI_LOG_FILE     = "logs/claude_ci.log"
 CI_TAG          = "CS-CID"
 
-SCAN_INTERVAL   = 600    # 10분마다 Claude 분석 (크레딧 절약)
+SCAN_INTERVAL   = 300    # 5분마다 Claude 분석
 CHECK_INTERVAL  = 10     # 10초마다 포지션 체크
 ENTRY_KRW       = 200_000
 INITIAL_BALANCE = 1_000_000
