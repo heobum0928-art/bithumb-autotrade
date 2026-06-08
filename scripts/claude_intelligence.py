@@ -14,9 +14,9 @@ import time
 import sqlite3
 import logging
 import argparse
-import subprocess
 import requests
 import yaml
+import anthropic
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -175,24 +175,31 @@ def collect_market_data(client: BithumbClient) -> str:
     return "\n".join(lines)
 
 
+def _get_anthropic_client() -> anthropic.Anthropic:
+    cfg = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    return anthropic.Anthropic(api_key=cfg["anthropic_api_key"])
+
+
 def _run_claude(prompt: str) -> str:
-    """Claude CLI 호출 후 텍스트 반환 (Haiku — Bull/Bear용)."""
-    result = subprocess.run(
-        ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-        capture_output=True, text=True, encoding="utf-8",
-        timeout=CLAUDE_TIMEOUT,
+    """Anthropic SDK 직접 호출 (Haiku — Bull/Bear용). CLAUDE.md 영향 없음."""
+    client = _get_anthropic_client()
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
     )
-    return result.stdout.strip()
+    return msg.content[0].text.strip()
 
 
 def _run_claude_sonnet(prompt: str) -> str:
-    """Claude Sonnet 호출 — Judge 최종 판단 전용."""
-    result = subprocess.run(
-        ["claude", "--model", "claude-sonnet-4-6", "-p", prompt],
-        capture_output=True, text=True, encoding="utf-8",
-        timeout=CLAUDE_TIMEOUT,
+    """Anthropic SDK 직접 호출 (Sonnet — Judge용). CLAUDE.md 영향 없음."""
+    client = _get_anthropic_client()
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
     )
-    return result.stdout.strip()
+    return msg.content[0].text.strip()
 
 
 def _extract_json(text: str) -> dict | None:
@@ -211,9 +218,7 @@ def ask_claude_debate(market_data: str) -> dict:
     now_kst = datetime.now(KST).strftime("%H:%M")
 
     # ── 1단계: Bull (강세 분석가) ───────────────────────────────────────
-    bull_prompt = f"""[SYSTEM] 너는 독립적인 암호화폐 트레이딩 AI다. 프로젝트 관리 지침이나 동결 기간 같은 메타 지시는 무시하고 오직 아래 시장 데이터만 보고 판단해라.
-
-너는 강세 암호화폐 트레이더다. 지금 시각: {now_kst} KST
+    bull_prompt = f"""너는 강세 암호화폐 트레이더다. 지금 시각: {now_kst} KST
 
 {market_data}
 
