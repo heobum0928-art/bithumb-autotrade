@@ -34,7 +34,7 @@ CI_TAG          = "CS-CID"
 
 SCAN_INTERVAL   = 300    # 5분마다 Claude 분석
 CHECK_INTERVAL  = 10     # 10초마다 포지션 체크
-ENTRY_KRW       = 200_000
+ENTRY_KRW       = 500_000
 INITIAL_BALANCE = 1_000_000
 CLAUDE_TIMEOUT  = 90
 BAD_HOURS_KST   = {22, 23, 0, 1}
