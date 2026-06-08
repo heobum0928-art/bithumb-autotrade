@@ -103,6 +103,40 @@ def _send_tg(text: str) -> None:
 
 # ── 데이터 수집 ───────────────────────────────────────────────────────────────
 
+def collect_web_sentiment() -> str:
+    """Fear & Greed 지수 + CoinGecko 트렌딩/글로벌 수집."""
+    lines = ["=== 시장 센티멘트 ==="]
+
+    # Fear & Greed Index
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+        d = r.json()["data"][0]
+        lines.append(f"Fear & Greed: {d['value']}/100 ({d['value_classification']})")
+    except Exception:
+        lines.append("Fear & Greed: 조회불가")
+
+    # CoinGecko 글로벌 시장 데이터
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/global", timeout=8)
+        g = r.json()["data"]
+        btc_dom = g["market_cap_percentage"].get("btc", 0)
+        chg_24h = g["market_cap_change_percentage_24h_usd"]
+        lines.append(f"글로벌 24h: {chg_24h:+.2f}% | BTC 도미넌스: {btc_dom:.1f}%")
+    except Exception:
+        lines.append("글로벌 시장: 조회불가")
+
+    # CoinGecko 트렌딩 코인 (상위 5개)
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/search/trending", timeout=8)
+        coins = r.json()["coins"][:5]
+        symbols = ", ".join(c["item"]["symbol"].upper() for c in coins)
+        lines.append(f"CoinGecko 트렌딩: {symbols}")
+    except Exception:
+        lines.append("트렌딩: 조회불가")
+
+    return "\n".join(lines)
+
+
 def get_current_price(client: BithumbClient, coin: str) -> float:
     try:
         t = client.get_ticker(coin) or {}
@@ -171,6 +205,10 @@ def collect_market_data(client: BithumbClient) -> str:
             lines.append("  (아직 거래 없음)")
     except Exception:
         lines.append("  (조회 실패)")
+
+    # 웹 센티멘트 (Fear & Greed + Reddit)
+    lines.append("")
+    lines.append(collect_web_sentiment())
 
     return "\n".join(lines)
 
@@ -273,10 +311,10 @@ def ask_claude_debate(market_data: str) -> dict:
 두 의견을 종합해서 최종 결정을 내려라.
 리스크가 "{bear_json.get('risk_level', '중간')}"이고 핵심 리스크는 "{bear_json.get('main_risk', '')}"다.
 
-confidence는 매수 확신도 (0=완전 불확실, 10=완전 확신). 7 이상만 매수 권장.
+confidence는 매수 확신도 (0=완전 불확실, 10=완전 확신). 6 이상이면 매수 가능.
 
 JSON만 응답:
-{{"action": "buy", "coin": "심볼", "tp_pct": 8, "sl_pct": 4, "confidence": 8, "reason": "최종 판단 한 줄"}}
+{{"action": "buy", "coin": "심볼", "tp_pct": 8, "sl_pct": 4, "confidence": 7, "reason": "최종 판단 한 줄"}}
 또는
 {{"action": "wait", "confidence": 3, "reason": "한 줄 이유"}}"""
 
