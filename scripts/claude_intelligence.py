@@ -14,9 +14,9 @@ import time
 import sqlite3
 import logging
 import argparse
+import subprocess
 import requests
 import yaml
-import anthropic
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -175,31 +175,28 @@ def collect_market_data(client: BithumbClient) -> str:
     return "\n".join(lines)
 
 
-def _get_anthropic_client() -> anthropic.Anthropic:
-    cfg = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
-    return anthropic.Anthropic(api_key=cfg["anthropic_api_key"])
+_ROOT = Path(__file__).parent.parent
+_CLAUDE_CWD = str(_ROOT.parent)  # c:\code\ — CLAUDE.md 없는 상위 디렉토리
 
 
 def _run_claude(prompt: str) -> str:
-    """Anthropic SDK 직접 호출 (Haiku — Bull/Bear용). CLAUDE.md 영향 없음."""
-    client = _get_anthropic_client()
-    msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
+    """claude CLI 호출 (Max 요금제). cwd를 프로젝트 밖으로 설정해 CLAUDE.md 미로드."""
+    result = subprocess.run(
+        ["claude", "-p", prompt],
+        capture_output=True, text=True, encoding="utf-8",
+        timeout=CLAUDE_TIMEOUT, cwd=_CLAUDE_CWD,
     )
-    return msg.content[0].text.strip()
+    return result.stdout.strip()
 
 
 def _run_claude_sonnet(prompt: str) -> str:
-    """Anthropic SDK 직접 호출 (Sonnet — Judge용). CLAUDE.md 영향 없음."""
-    client = _get_anthropic_client()
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
+    """Judge용 — 같은 CLI, 같은 cwd."""
+    result = subprocess.run(
+        ["claude", "-p", prompt],
+        capture_output=True, text=True, encoding="utf-8",
+        timeout=CLAUDE_TIMEOUT, cwd=_CLAUDE_CWD,
     )
-    return msg.content[0].text.strip()
+    return result.stdout.strip()
 
 
 def _extract_json(text: str) -> dict | None:
