@@ -217,6 +217,11 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 | 2026-06-06 | vb_trader.py 신규 | 대상 코인 | - | 24h 거래대금 20억+ | 볼륨 화이트리스트, 자정 갱신 |
 | 2026-06-06 | vb_trader.py 신규 | 자정 강제청산 | - | 00:00 KST | 당일 전략 초기화 |
 | 2026-06-06 | vb_trader.py 신규 | 실행모드 | - | --dry-run (모의투자) | watchdog EXTRA_ARGS로 자동 적용 |
+| 2026-06-08 | vb_trader.py | TP | 3% 고정 | 없음 (하이브리드) | 수익 극대화 — "이기는 코인은 끝까지" 철학 |
+| 2026-06-08 | vb_trader.py | Trail활성 | - | +5% | +5% 미만 구간은 SL만 적용 |
+| 2026-06-08 | vb_trader.py | Trail폭 | - | -3% (고점 대비) | 고점 -3% 이탈 시 청산 |
+| 2026-06-08 | vb_trader.py | VB_ENTRY_KRW | 100,000원 | 400,000원 | 실거래 전환 (--live), 증거금 확대 |
+| 2026-06-08 | vb_trader.py | 재진입 규칙 | 당일 1코인 1회 | SL 후 차단 / 익절 후 허용 | 손절난 코인 재진입 방지 + 수익 코인 2파 포착 |
 
 ### 동결 파라미터와의 관계
 - vb_trader.py는 alt_monitor.py의 OVERSOLD 전략과 **완전히 별개**다.

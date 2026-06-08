@@ -489,17 +489,22 @@ def run() -> None:
                 trail_stop = highest * (1 - VB_TRAIL_PCT)
 
                 if pnl_pct >= VB_TRAIL_ACTIVATE and current <= trail_stop:
-                    # 트레일링 스탑 발동 (고점 -3%)
+                    # 트레일링 스탑 발동 (고점 -3%) — 수익 청산: 당일 재진입 허용
                     reason = f"트레일링-{VB_TRAIL_PCT*100:.0f}% (고점 {highest:,.0f}원 {pnl_pct*100:+.1f}%)"
                     if _DRY_RUN:
                         _do_sell_dry(pos, current, reason)
+                        entered_coins.discard(coin)
+                        save_entered(entered_coins)
                         pos = None
                         save_pos(None)
                     elif _do_sell_live(pos, client, reason, current):
+                        entered_coins.discard(coin)
+                        save_entered(entered_coins)
                         pos = None
                         save_pos(None)
 
                 elif pnl_pct <= VB_SL:
+                    # SL 손절 — 당일 재진입 차단 유지
                     reason = f"SL-2% ({pnl_pct * 100:+.1f}%)"
                     if _DRY_RUN:
                         _do_sell_dry(pos, current, reason)
