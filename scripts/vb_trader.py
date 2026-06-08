@@ -4,8 +4,9 @@
 전략:
   목표가 = 당일 시가 + 전일 고저폭 × K
   진입: 실시간 가격이 목표가 돌파 시 시장가 매수
-  익절: 진입가 대비 +VB_TP (3%)
-  손절: 진입가 대비 +VB_SL (-2%)
+  청산 (하이브리드):
+    +5% 미만 구간: SL -2%만 적용 (손실 차단)
+    +5% 돌파 시:  트레일링 스탑 활성화 — 고점 대비 -3% 이탈 시 청산
   강제 청산: KST 00:00 미청산 포지션 시장가 청산
 
 실행:
@@ -81,8 +82,9 @@ log = logging.getLogger(__name__)
 
 # ── 전략 상수 ─────────────────────────────────────────────────────────────────
 K                    = 0.5              # 변동성 돌파 계수 (래리 윌리엄스)
-VB_TP                = 0.03            # 익절 목표 +3%
 VB_SL                = -0.02           # 손절 한도 -2%
+VB_TRAIL_ACTIVATE    = 0.05            # 트레일링 스탑 활성화 기준 +5%
+VB_TRAIL_PCT         = 0.03            # 트레일링 스탑 폭 — 고점 대비 -3%
 VB_ENTRY_KRW         = 400_000         # 1회 진입금액 (40만원)
 MIN_DAILY_VOLUME_KRW = 20_000_000_000  # 볼륨 화이트리스트 기준 (20억 KRW)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
@@ -442,10 +444,13 @@ def run() -> None:
                     pos["highest"] = current
                     save_pos(pos)
 
-                pnl_pct = (current - entry) / entry
+                pnl_pct    = (current - entry) / entry
+                highest    = pos.get("highest", entry)
+                trail_stop = highest * (1 - VB_TRAIL_PCT)
 
-                if pnl_pct >= VB_TP:
-                    reason = f"TP+3% ({pnl_pct * 100:+.1f}%)"
+                if pnl_pct >= VB_TRAIL_ACTIVATE and current <= trail_stop:
+                    # 트레일링 스탑 발동 (고점 -3%)
+                    reason = f"트레일링-{VB_TRAIL_PCT*100:.0f}% (고점 {highest:,.0f}원 {pnl_pct*100:+.1f}%)"
                     if _DRY_RUN:
                         _do_sell_dry(pos, current, reason)
                         pos = None
@@ -477,7 +482,7 @@ def run() -> None:
 def main() -> None:
     log.info(
         f"[VB] vb_trader 시작 — 모드={'DRY-RUN' if _DRY_RUN else 'LIVE'} "
-        f"| K={K} | TP={VB_TP*100:.0f}% | SL={abs(VB_SL)*100:.0f}% "
+        f"| K={K} | Trail활성={VB_TRAIL_ACTIVATE*100:.0f}% | Trail폭={VB_TRAIL_PCT*100:.0f}% | SL={abs(VB_SL)*100:.0f}% "
         f"| 진입={VB_ENTRY_KRW:,.0f}원"
     )
     run()
