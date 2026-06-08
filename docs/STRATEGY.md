@@ -231,3 +231,5 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 |------|------|---------|--------|--------|----------|
 | 2026-06-07 | claude_intelligence.py | Judge LLM | Haiku | Sonnet 4.6 | 최종 판단 품질 향상 — QuantAgent 비용최적화 패턴 적용 |
 | 2026-06-07 | claude_intelligence.py | confidence 기반 진입금액 | 고정 20만원 | confidence≥7→20만원, <7→10만원 | Judge 확신도 낮으면 소액 진입, 손실 제한 |
+| 2026-06-08 | claude_intelligence.py | 거래 실행 | 모의(state JSON만) | 실거래 (market_buy/sell API) | --live 플래그 시 실제 빗썸 주문 실행 |
+| 2026-06-08 | watchdog.py | claude_intelligence 실행모드 | 모의투자 (no flag) | 실거래 (--live) | 실전 투입 결정 |
