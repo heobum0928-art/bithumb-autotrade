@@ -329,7 +329,19 @@ def monitor_position(client: BithumbClient, state: dict) -> bool:
         exit_reason = f"SL {pnl_pct*100:+.1f}%"
 
     if exit_reason:
-        recv    = exit_price * pos["volume"]
+        if _LIVE:
+            try:
+                order = client.market_sell(f"KRW-{coin}", pos["volume"])
+                log.info(f"[CI {coin}] 실거래 매도 주문: {order.get('uuid')}")
+                time.sleep(1)
+                accounts = client.get_accounts()
+                recv = next((float(a["balance"]) for a in accounts if a["currency"] == "KRW"), exit_price * pos["volume"])
+            except Exception as e:
+                log.error(f"[CI {coin}] 매도 실패: {e}")
+                recv = exit_price * pos["volume"]
+        else:
+            recv = exit_price * pos["volume"]
+
         pnl_krw = recv - pos["cost_krw"]
         state["balance"] = state.get("balance", INITIAL_BALANCE) + recv
         log.info(f"[CI {coin}] {exit_reason} PnL={pnl_pct*100:+.2f}% ({pnl_krw:+,.0f}원)")
@@ -434,7 +446,19 @@ def run() -> None:
             log.warning(f"{coin} 가격 0 — 스킵")
             continue
 
-        volume  = entry_krw / price
+        if _LIVE:
+            try:
+                order = client.market_buy(f"KRW-{coin}", entry_krw)
+                log.info(f"[CI {coin}] 실거래 매수 주문: {order.get('uuid')}")
+                time.sleep(1)
+                accounts = client.get_accounts()
+                volume = next((float(a["balance"]) for a in accounts if a["currency"] == coin), entry_krw / price)
+            except Exception as e:
+                log.error(f"[CI {coin}] 매수 실패: {e}")
+                continue
+        else:
+            volume = entry_krw / price
+
         new_pos = {
             "coin":        coin,
             "market":      f"KRW-{coin}",
