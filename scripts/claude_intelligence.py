@@ -178,9 +178,10 @@ def collect_market_data(client: BithumbClient) -> str:
 def _run_claude(prompt: str) -> str:
     """Claude CLI 호출 후 텍스트 반환 (Haiku — Bull/Bear용)."""
     result = subprocess.run(
-        ["claude", "--model", "claude-haiku-4-5-20251001", "--no-config", "-p", prompt],
+        ["claude", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
         capture_output=True, text=True, encoding="utf-8",
         timeout=CLAUDE_TIMEOUT,
+        cwd=str(ROOT.parent),  # CLAUDE.md 로딩 방지 (프로젝트 외부에서 실행)
     )
     return result.stdout.strip()
 
@@ -188,9 +189,10 @@ def _run_claude(prompt: str) -> str:
 def _run_claude_sonnet(prompt: str) -> str:
     """Claude Sonnet 호출 — Judge 최종 판단 전용."""
     result = subprocess.run(
-        ["claude", "--model", "claude-sonnet-4-6", "--no-config", "-p", prompt],
+        ["claude", "--model", "claude-sonnet-4-6", "-p", prompt],
         capture_output=True, text=True, encoding="utf-8",
         timeout=CLAUDE_TIMEOUT,
+        cwd=str(ROOT.parent),  # CLAUDE.md 로딩 방지
     )
     return result.stdout.strip()
 
