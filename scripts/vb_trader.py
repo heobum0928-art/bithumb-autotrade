@@ -392,26 +392,33 @@ def run() -> None:
                     tracker.start_ws(symbols)
                     time.sleep(5)
 
-            # 자정 강제 청산 (00:00~00:01 KST, 1회만)
-            if now_kst.hour == 0 and now_kst.minute == 0 and not midnight_cleared:
+            # 자정 강제 청산 (00:00~00:05 KST, 1회만 — API 지연 고려해 5분 윈도우)
+            if now_kst.hour == 0 and now_kst.minute < 5 and not midnight_cleared:
                 if pos is not None:
                     current = tracker.get_latest_price(pos["coin"])
-                    if current > 0:
-                        if _DRY_RUN:
-                            _do_sell_dry(pos, current, "자정강제청산")
-                        else:
-                            _do_sell_live(pos, client, "자정강제청산", current)
+                    if current <= 0:
+                        current = pos["entry_price"]
+                        log.warning(f"[{pos['coin']}] 자정강제청산: 가격 미수신, 진입가로 대체")
+                    if _DRY_RUN:
+                        _do_sell_dry(pos, current, "자정강제청산")
+                        pos = None
+                        save_pos(None)
+                    elif _do_sell_live(pos, client, "자정강제청산", current):
+                        pos = None
+                        save_pos(None)
                     else:
-                        log.warning(f"[{pos['coin']}] 자정강제청산: 가격 미수신, 진입가로 기록")
-                        _do_sell_dry(pos, pos["entry_price"], "자정강제청산(가격미수신)")
-                    pos = None
-                    save_pos(None)
+                        log.error(f"[{pos['coin']}] 자정강제청산 실패 — 포지션 유지, 재시도 대기")
+                        # midnight_cleared=True 하지 않아 5분 내 재시도
+                        time.sleep(SCAN_SEC)
+                        continue
                 midnight_cleared = True
                 log.info("[VB] 자정 처리 완료 — midnight_cleared=True")
 
             # 포지션 없음: VB 목표가 돌파 감지
             if pos is None:
-                for coin, target in vb_targets.items():
+                for coin, target in list(vb_targets.items()):  # 스냅샷으로 반복
+                    if pos is not None:  # 루프 중 진입 완료 시 즉시 탈출
+                        break
                     if coin in entered_coins:
                         continue  # 당일 이미 진입한 코인 스킵
                     current = tracker.get_latest_price(coin)
@@ -433,10 +440,12 @@ def run() -> None:
                             if volume <= 0:
                                 log.error(f"[{coin}] 매수 실패 — 수량 0, 스킵")
                                 entered_coins.add(coin)
+                                save_entered(entered_coins)
                                 continue
                         except Exception as e:
                             log.error(f"[{coin}] 매수 오류: {e}")
                             entered_coins.add(coin)
+                            save_entered(entered_coins)
                             continue
                     pos = {
                         "coin":        coin,
