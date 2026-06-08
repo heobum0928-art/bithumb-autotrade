@@ -38,7 +38,6 @@ BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
-    "vb_trader":             ROOT / "scripts" / "vb_trader.py",        # VB 전략 dry-run
 }
 
 
