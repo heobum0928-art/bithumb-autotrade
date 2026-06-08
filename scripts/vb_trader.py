@@ -83,7 +83,7 @@ log = logging.getLogger(__name__)
 K                    = 0.5              # 변동성 돌파 계수 (래리 윌리엄스)
 VB_TP                = 0.03            # 익절 목표 +3%
 VB_SL                = -0.02           # 손절 한도 -2%
-VB_ENTRY_KRW         = 100_000         # 1회 진입금액 (10만원)
+VB_ENTRY_KRW         = 400_000         # 1회 진입금액 (40만원)
 MIN_DAILY_VOLUME_KRW = 20_000_000_000  # 볼륨 화이트리스트 기준 (20억 KRW)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
@@ -273,9 +273,36 @@ def _do_sell_dry(pos: dict, current_price: float, reason: str) -> None:
     )
 
 
-def _do_sell_live(pos: dict, client: BithumbClient, reason: str) -> None:
-    """실거래 청산 — 추후 구현."""
-    log.error("[LIVE] 실거래 청산 미구현 — --dry-run 모드만 사용 가능")
+def _do_sell_live(pos: dict, client: BithumbClient, reason: str, current_price: float = 0.0) -> bool:
+    """실거래 청산 — KRW delta로 실수령액 계산."""
+    coin = pos["coin"]
+    vol  = pos["volume"]
+    try:
+        accounts_before = client.get_accounts()
+        krw_before = next((float(a["balance"]) for a in accounts_before if a["currency"] == "KRW"), 0.0)
+        client.market_sell(pos["market"], vol)
+        time.sleep(2)
+        accounts_after = client.get_accounts()
+        krw_after  = next((float(a["balance"]) for a in accounts_after if a["currency"] == "KRW"), 0.0)
+        recv_krw   = krw_after - krw_before
+        if recv_krw <= 0:
+            recv_krw = current_price * vol  # 조회 실패 fallback
+        exit_price = recv_krw / vol if vol > 0 else current_price
+        pnl_krw    = recv_krw - pos["cost_krw"]
+        pnl_pct    = pnl_krw / pos["cost_krw"] * 100
+        log.warning(
+            f"[{coin}] [VB] 실거래 청산 @{exit_price:,.1f}원 "
+            f"PnL={pnl_pct:+.2f}% ({pnl_krw:+,.0f}원) | {reason}"
+        )
+        _record(pos, exit_price, recv_krw, reason)
+        notify.send(
+            f"[VB] {coin} 청산 @{exit_price:,.1f}원 "
+            f"PnL={pnl_pct:+.2f}% ({pnl_krw:+,.0f}원) | {reason}"
+        )
+        return True
+    except Exception as e:
+        log.error(f"[{coin}] 청산 실패: {e}")
+        return False
 
 # ── 메인 루프 ─────────────────────────────────────────────────────────────────
 def run() -> None:
@@ -341,7 +368,7 @@ def run() -> None:
                         if _DRY_RUN:
                             _do_sell_dry(pos, current, "자정강제청산")
                         else:
-                            _do_sell_live(pos, client, "자정강제청산")
+                            _do_sell_live(pos, client, "자정강제청산", current)
                     else:
                         log.warning(f"[{pos['coin']}] 자정강제청산: 가격 미수신, 진입가로 기록")
                         _do_sell_dry(pos, pos["entry_price"], "자정강제청산(가격미수신)")
@@ -358,8 +385,27 @@ def run() -> None:
                     current = tracker.get_latest_price(coin)
                     if current <= 0 or current < target:
                         continue
-                    # 목표가 상향 돌파 → 모의 진입
-                    volume = VB_ENTRY_KRW / current
+                    # 목표가 상향 돌파 → 진입
+                    if _DRY_RUN:
+                        volume = VB_ENTRY_KRW / current
+                    else:
+                        # 실거래 매수 — delta 방식으로 실수량 계산
+                        try:
+                            accs_before = client.get_accounts()
+                            vol_before  = next((float(a["balance"]) for a in accs_before if a["currency"] == coin), 0.0)
+                            client.market_buy(f"KRW-{coin}", VB_ENTRY_KRW)
+                            time.sleep(2)
+                            accs_after  = client.get_accounts()
+                            vol_after   = next((float(a["balance"]) for a in accs_after if a["currency"] == coin), 0.0)
+                            volume      = vol_after - vol_before
+                            if volume <= 0:
+                                log.error(f"[{coin}] 매수 실패 — 수량 0, 스킵")
+                                entered_coins.add(coin)
+                                continue
+                        except Exception as e:
+                            log.error(f"[{coin}] 매수 오류: {e}")
+                            entered_coins.add(coin)
+                            continue
                     pos = {
                         "coin":        coin,
                         "market":      f"KRW-{coin}",
@@ -375,10 +421,10 @@ def run() -> None:
                     entered_coins.add(coin)
                     log.warning(
                         f"[{coin}] [{_LOG_TAG}] 목표가 돌파! "
-                        f"목표={target:,.0f} 현재={current:,.0f}원 → 모의 진입"
+                        f"목표={target:,.0f} 현재={current:,.0f}원 → {'모의' if _DRY_RUN else '실거래'} 진입"
                     )
                     notify.send(
-                        f"[{_LOG_TAG}] {coin} 모의 진입 "
+                        f"[{_LOG_TAG}] {coin} {'모의' if _DRY_RUN else '실거래'} 진입 "
                         f"@{current:,.0f}원 (목표={target:,.0f}원)"
                     )
                     break  # 1코인 1포지션
@@ -402,19 +448,21 @@ def run() -> None:
                     reason = f"TP+3% ({pnl_pct * 100:+.1f}%)"
                     if _DRY_RUN:
                         _do_sell_dry(pos, current, reason)
-                    else:
-                        _do_sell_live(pos, client, reason)
-                    pos = None
-                    save_pos(None)
+                        pos = None
+                        save_pos(None)
+                    elif _do_sell_live(pos, client, reason, current):
+                        pos = None
+                        save_pos(None)
 
                 elif pnl_pct <= VB_SL:
                     reason = f"SL-2% ({pnl_pct * 100:+.1f}%)"
                     if _DRY_RUN:
                         _do_sell_dry(pos, current, reason)
-                    else:
-                        _do_sell_live(pos, client, reason)
-                    pos = None
-                    save_pos(None)
+                        pos = None
+                        save_pos(None)
+                    elif _do_sell_live(pos, client, reason, current):
+                        pos = None
+                        save_pos(None)
 
         except KeyboardInterrupt:
             log.info("[VB] 종료 요청 (Ctrl+C)")

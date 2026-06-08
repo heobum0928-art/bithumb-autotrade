@@ -37,6 +37,7 @@ BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
+    "vb_trader":             ROOT / "scripts" / "vb_trader.py",        # 변동성 돌파 실거래
 }
 
 
@@ -60,7 +61,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "claude_screener_dry":   ["--dry-run"],
     "claude_screener_watch": ["--watch-mode"],
     "swing_monitor":         ["--loop"],
-    "vb_trader":             ["--dry-run"],   # 모의투자 모드로 시작
+    "vb_trader":             ["--live"],      # 실거래 모드
     "claude_intelligence":   ["--live"],      # 실전 거래 모드
 }
 
