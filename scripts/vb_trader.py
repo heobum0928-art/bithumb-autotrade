@@ -424,6 +424,10 @@ def run() -> None:
                     current = tracker.get_latest_price(coin)
                     if current <= 0 or current < target:
                         continue
+                    # 늦은 진입 방지: 목표가 대비 +3% 초과 시 스킵
+                    if (current - target) / target > 0.03:
+                        log.info(f"[{coin}] 늦은진입 스킵 — 목표 {target:,.0f}원 대비 현재 {(current-target)/target*100:+.1f}%")
+                        continue
                     # 목표가 상향 돌파 → 진입
                     if _DRY_RUN:
                         volume = VB_ENTRY_KRW / current
