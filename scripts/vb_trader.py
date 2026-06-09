@@ -276,6 +276,7 @@ def _record(pos: dict, exit_price: float, recv_krw: float, reason: str) -> None:
             entered_at=datetime.fromisoformat(pos["entered_at"]).replace(tzinfo=None),
             exited_at=datetime.now(),
             max_price=pos.get("highest", exit_price),
+            entry_btc_chg=pos.get("btc_chg24h"),
         )
     except Exception as e:
         log.error(f"[DB] 기록 실패: {e}")
@@ -451,6 +452,11 @@ def run() -> None:
                             entered_coins.add(coin)
                             save_entered(entered_coins)
                             continue
+                    try:
+                        btc_info   = client.get_price("BTC")
+                        btc_chg24h = btc_info.get("signed_change_rate", None)
+                    except Exception:
+                        btc_chg24h = None
                     pos = {
                         "coin":        coin,
                         "market":      f"KRW-{coin}",
@@ -461,6 +467,7 @@ def run() -> None:
                         "entered_at":  datetime.now().isoformat(),
                         "vb_target":   target,
                         "mock":        _DRY_RUN,
+                        "btc_chg24h":  btc_chg24h,
                     }
                     save_pos(pos)
                     entered_coins.add(coin)
