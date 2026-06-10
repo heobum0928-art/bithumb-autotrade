@@ -89,6 +89,7 @@ VB_ENTRY_KRW         = 400_000         # 1회 진입금액 (40만원)
 MIN_DAILY_VOLUME_KRW = 2_000_000_000   # 볼륨 화이트리스트 기준 (20억 KRW) — 2026-06-10 200억→20억 (원래 설계 의도 복원)
 BTC_WEAK_FILTER      = -0.015          # BTC 24h 이하면 진입 차단 (잠정, 10신호 후 재평가)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
+BAD_HOURS_KST        = {0, 1}          # 자정 직후 진입 차단 (일봉 캔들 불안정 구간)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 1.0             # WS 재연결 최소 대기 (초)
 POS_PATH             = Path("data/vb_pos.json")
@@ -417,6 +418,10 @@ def run() -> None:
                 log.info("[VB] 자정 처리 완료 — midnight_cleared=True")
 
             # 포지션 없음: VB 목표가 돌파 감지
+            if pos is None and datetime.now(KST).hour in BAD_HOURS_KST:
+                time.sleep(SCAN_SEC)
+                continue
+
             if pos is None:
                 for coin, target in list(vb_targets.items()):  # 스냅샷으로 반복
                     if pos is not None:  # 루프 중 진입 완료 시 즉시 탈출
