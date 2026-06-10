@@ -507,8 +507,12 @@ def run() -> None:
                 pnl_pct    = (current - entry) / entry
                 highest    = pos.get("highest", entry)
                 trail_stop = highest * (1 - VB_TRAIL_PCT)
+                # 트레일링 활성화는 고점 기준 (2026-06-10 버그수정):
+                # 현재 수익률 기준이면 고점 +5~8.25% 구간에서 스탑 가격이 +5% 미만이 되어
+                # 트레일링이 영원히 발동 불가 → SL까지 밀리는 사각지대 발생
+                trail_active = (highest - entry) / entry >= VB_TRAIL_ACTIVATE
 
-                if pnl_pct >= VB_TRAIL_ACTIVATE and current <= trail_stop:
+                if trail_active and current <= trail_stop:
                     # 트레일링 스탑 발동 (고점 -3%) — 수익 청산: 당일 재진입 허용
                     reason = f"트레일링-{VB_TRAIL_PCT*100:.0f}% (고점 {highest:,.0f}원 {pnl_pct*100:+.1f}%)"
                     if _DRY_RUN:
