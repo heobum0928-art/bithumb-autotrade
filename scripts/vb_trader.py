@@ -90,6 +90,7 @@ MIN_DAILY_VOLUME_KRW = 2_000_000_000   # 볼륨 화이트리스트 기준 (20억
 BTC_WEAK_FILTER      = -0.015          # BTC 24h 이하면 진입 차단 (잠정, 10신호 후 재평가)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
 BAD_HOURS_KST        = {0, 1}          # 자정 직후 진입 차단 (일봉 캔들 불안정 구간)
+BREAKOUT_CONFIRM_SEC = 10              # 목표가 돌파 후 진입 전 유지 확인 시간 (초)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 1.0             # WS 재연결 최소 대기 (초)
 POS_PATH             = Path("data/vb_pos.json")
@@ -337,9 +338,10 @@ def run() -> None:
     client  = BithumbClient()
     tracker = PriceTracker()
 
-    whitelist: set[str]       = set()
-    vb_targets: dict[str, float] = {}   # coin -> vb_target
-    entered_coins: set[str]   = load_entered()  # 재시작해도 당일 진입 이력 유지
+    whitelist: set[str]           = set()
+    vb_targets: dict[str, float]  = {}   # coin -> vb_target
+    entered_coins: set[str]       = load_entered()  # 재시작해도 당일 진입 이력 유지
+    breakout_first_seen: dict[str, float] = {}      # coin -> 첫 돌파 감지 timestamp
 
     pos: dict | None = load_pos()
     today            = date.today()
@@ -381,6 +383,7 @@ def run() -> None:
                 midnight_cleared = False
                 entered_coins.clear()
                 save_entered(entered_coins)
+                breakout_first_seen.clear()
                 log.info("[VB] 날짜 교체 — 화이트리스트/VB목표가 재계산")
                 whitelist = _build_volume_whitelist(client)
                 vb_targets.clear()
@@ -433,12 +436,16 @@ def run() -> None:
                             log_vb_skip(coin, "재진입차단", cur, target)
                         continue
                     current = tracker.get_latest_price(coin)
-                    if current <= 0 or current < target:
+                    if current <= 0:
+                        continue
+                    if current < target:
+                        breakout_first_seen.pop(coin, None)  # 목표가 아래로 내려가면 초기화
                         continue
                     # 늦은 진입 방지: 목표가 대비 +3% 초과 시 스킵
                     if (current - target) / target > 0.03:
                         log.info(f"[{coin}] 늦은진입 스킵 — 목표 {target:,.0f}원 대비 현재 {(current-target)/target*100:+.1f}%")
                         log_vb_skip(coin, "늦은진입", current, target)
+                        breakout_first_seen.pop(coin, None)
                         continue
                     # BTC 약세 필터: BTC 24h -1.5% 이하면 진입 스킵 (조회 실패 시 fail-open)
                     try:
@@ -453,8 +460,18 @@ def run() -> None:
                             f"(기준 {BTC_WEAK_FILTER*100:.1f}%) | 목표 {target:,.0f}원 돌파였음"
                         )
                         log_vb_skip(coin, "BTC약세", current, target, btc_chg24h)
+                        breakout_first_seen.pop(coin, None)
                         continue
-                    # 목표가 상향 돌파 → 진입
+                    # 돌파 유지 확인 (BREAKOUT_CONFIRM_SEC초 이상 목표가 위에 머물러야 진입)
+                    now_ts = time.time()
+                    if coin not in breakout_first_seen:
+                        breakout_first_seen[coin] = now_ts
+                        log.debug(f"[{coin}] 돌파 감지 — {BREAKOUT_CONFIRM_SEC}초 유지 확인 중 (목표={target:,.0f}원)")
+                        continue
+                    if now_ts - breakout_first_seen[coin] < BREAKOUT_CONFIRM_SEC:
+                        continue
+                    breakout_first_seen.pop(coin, None)
+                    # 목표가 상향 돌파 확인 완료 → 진입
                     if _DRY_RUN:
                         volume = VB_ENTRY_KRW / current
                     else:
