@@ -52,7 +52,7 @@ _ensure_single_instance()
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bithumb.client import BithumbClient
-from bithumb.db import log_trade
+from bithumb.db import log_trade, log_vb_skip
 from bithumb import notify
 
 # ── --dry-run / --live 파싱 (early, before logging — _LOG_TAG needed for handler) ──
@@ -422,13 +422,18 @@ def run() -> None:
                     if pos is not None:  # 루프 중 진입 완료 시 즉시 탈출
                         break
                     if coin in entered_coins:
-                        continue  # 당일 이미 진입한 코인 스킵
+                        # 당일 이미 진입한 코인 스킵 — 목표 돌파 상태면 반사실 기록
+                        cur = tracker.get_latest_price(coin)
+                        if 0 < target <= cur:
+                            log_vb_skip(coin, "재진입차단", cur, target)
+                        continue
                     current = tracker.get_latest_price(coin)
                     if current <= 0 or current < target:
                         continue
                     # 늦은 진입 방지: 목표가 대비 +3% 초과 시 스킵
                     if (current - target) / target > 0.03:
                         log.info(f"[{coin}] 늦은진입 스킵 — 목표 {target:,.0f}원 대비 현재 {(current-target)/target*100:+.1f}%")
+                        log_vb_skip(coin, "늦은진입", current, target)
                         continue
                     # BTC 약세 필터: BTC 24h -1.5% 이하면 진입 스킵 (조회 실패 시 fail-open)
                     try:
@@ -442,6 +447,7 @@ def run() -> None:
                             f"[{coin}] BTC약세 스킵 — BTC 24h {btc_chg24h*100:+.1f}% "
                             f"(기준 {BTC_WEAK_FILTER*100:.1f}%) | 목표 {target:,.0f}원 돌파였음"
                         )
+                        log_vb_skip(coin, "BTC약세", current, target, btc_chg24h)
                         continue
                     # 목표가 상향 돌파 → 진입
                     if _DRY_RUN:

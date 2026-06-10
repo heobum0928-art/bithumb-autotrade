@@ -103,6 +103,17 @@ CREATE TABLE IF NOT EXISTS oversold_log (
     outcome_30m  REAL                -- 진입 후 +30분 가격변화율 (%)
 );
 CREATE INDEX IF NOT EXISTS idx_oversold_log_coin ON oversold_log(coin);
+CREATE TABLE IF NOT EXISTS vb_skip_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    date         TEXT    NOT NULL,   -- 차단 일자 (KST)
+    skipped_at   TEXT    NOT NULL,   -- 차단 시각 (최초 1회)
+    coin         TEXT    NOT NULL,
+    skip_reason  TEXT    NOT NULL,   -- BTC약세 / 늦은진입 / 재진입차단
+    price        REAL    NOT NULL,   -- 차단 시점 가격
+    vb_target    REAL,               -- 당일 VB 목표가
+    btc_chg24h   REAL                -- 차단 시점 BTC 24h 변화율
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vb_skip_uniq ON vb_skip_log(date, coin, skip_reason);
 """
 
 
@@ -133,6 +144,36 @@ def init_db() -> None:
             except Exception:
                 pass
     log.debug("DB initialised")
+
+
+# 같은 (날짜, 코인, 사유)는 첫 1회만 기록 — 2초 스캔 중복 방지용 메모리 캐시
+_vb_skip_seen: set[tuple] = set()
+
+
+def log_vb_skip(
+    coin: str,
+    skip_reason: str,
+    price: float,
+    vb_target: float | None = None,
+    btc_chg24h: float | None = None,
+) -> None:
+    """VB 진입 차단 기록 — 반사실(counterfactual) 분석용. 실패해도 절대 raise 안 함."""
+    today = date.today().isoformat()
+    key = (today, coin, skip_reason)
+    if key in _vb_skip_seen:
+        return
+    try:
+        with _conn() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO vb_skip_log "
+                "(date, skipped_at, coin, skip_reason, price, vb_target, btc_chg24h) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (today, datetime.now().isoformat(), coin, skip_reason,
+                 price, vb_target, btc_chg24h),
+            )
+        _vb_skip_seen.add(key)
+    except Exception as e:
+        log.warning(f"[DB] vb_skip 기록 실패: {e}")
 
 
 def log_trade(
