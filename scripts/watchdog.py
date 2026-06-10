@@ -62,7 +62,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "claude_screener_watch": ["--watch-mode"],
     "swing_monitor":         ["--loop"],
     "vb_trader":             ["--live"],      # 실거래 모드
-    "claude_intelligence":   ["--live"],      # 실전 거래 모드
+    "claude_intelligence":   [],              # 2026-06-10 dry-run 전환 — 검증 전 실거래 금지 원칙
 }
 
 # 인스턴스 식별용 kill 키워드 매핑
