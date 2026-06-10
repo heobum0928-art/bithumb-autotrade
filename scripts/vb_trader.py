@@ -87,6 +87,7 @@ VB_TRAIL_ACTIVATE    = 0.05            # 트레일링 스탑 활성화 기준 +5
 VB_TRAIL_PCT         = 0.03            # 트레일링 스탑 폭 — 고점 대비 -3%
 VB_ENTRY_KRW         = 400_000         # 1회 진입금액 (40만원)
 MIN_DAILY_VOLUME_KRW = 20_000_000_000  # 볼륨 화이트리스트 기준 (20억 KRW)
+BTC_WEAK_FILTER      = -0.015          # BTC 24h 이하면 진입 차단 (잠정, 10신호 후 재평가)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 1.0             # WS 재연결 최소 대기 (초)
@@ -429,6 +430,19 @@ def run() -> None:
                     if (current - target) / target > 0.03:
                         log.info(f"[{coin}] 늦은진입 스킵 — 목표 {target:,.0f}원 대비 현재 {(current-target)/target*100:+.1f}%")
                         continue
+                    # BTC 약세 필터: BTC 24h -1.5% 이하면 진입 스킵 (조회 실패 시 fail-open)
+                    try:
+                        btc_info   = client.get_price("BTC")
+                        btc_chg24h = btc_info.get("signed_change_rate", None)
+                    except Exception as e:
+                        btc_chg24h = None
+                        log.warning(f"[BTC필터] 조회 실패 — 필터 생략하고 진입 허용: {e}")
+                    if btc_chg24h is not None and btc_chg24h <= BTC_WEAK_FILTER:
+                        log.warning(
+                            f"[{coin}] BTC약세 스킵 — BTC 24h {btc_chg24h*100:+.1f}% "
+                            f"(기준 {BTC_WEAK_FILTER*100:.1f}%) | 목표 {target:,.0f}원 돌파였음"
+                        )
+                        continue
                     # 목표가 상향 돌파 → 진입
                     if _DRY_RUN:
                         volume = VB_ENTRY_KRW / current
@@ -452,11 +466,6 @@ def run() -> None:
                             entered_coins.add(coin)
                             save_entered(entered_coins)
                             continue
-                    try:
-                        btc_info   = client.get_price("BTC")
-                        btc_chg24h = btc_info.get("signed_change_rate", None)
-                    except Exception:
-                        btc_chg24h = None
                     pos = {
                         "coin":        coin,
                         "market":      f"KRW-{coin}",
