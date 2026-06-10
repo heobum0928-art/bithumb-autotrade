@@ -90,6 +90,7 @@ MIN_DAILY_VOLUME_KRW = 2_000_000_000   # 볼륨 화이트리스트 기준 (20억
 BTC_WEAK_FILTER      = -0.015          # BTC 24h 이하면 진입 차단 (잠정, 10신호 후 재평가)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
 BAD_HOURS_KST        = {0, 1}          # 자정 직후 진입 차단 (일봉 캔들 불안정 구간)
+STABLECOIN_EXCLUDE   = {"USDT", "USDC", "DAI", "TUSD", "BUSD", "FDUSD"}  # VB 전략 무효 코인
 BREAKOUT_CONFIRM_SEC = 10              # 목표가 돌파 후 진입 전 유지 확인 시간 (초)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 WS_MIN_INTERVAL      = 1.0             # WS 재연결 최소 대기 (초)
@@ -106,7 +107,7 @@ def _build_volume_whitelist(client: BithumbClient) -> set[str]:
             if coin == "date":
                 continue
             vol = float(data.get("acc_trade_value_24H", 0))
-            if vol >= MIN_DAILY_VOLUME_KRW:
+            if vol >= MIN_DAILY_VOLUME_KRW and coin not in STABLECOIN_EXCLUDE:
                 wl.add(coin)
         log.info(f"[볼륨필터] {len(wl)}개 코인 (20억+)")
         return wl
