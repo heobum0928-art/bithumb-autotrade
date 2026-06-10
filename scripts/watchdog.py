@@ -69,7 +69,8 @@ EXTRA_ARGS: dict[str, list[str]] = {
 KILL_KEYWORDS: dict[str, str] = {
     "claude_screener_dry":   "--dry-run",
     "claude_screener_watch": "--watch-mode",
-    "vb_trader":             "--dry-run",    # vb_trader.py --dry-run 프로세스 식별용
+    # vb_trader: 키워드 제거 (2026-06-10) — "--dry-run" 키워드 잔존으로 --live 인스턴스를
+    # 못 죽여 싱글톤 포트 충돌 → 재시작 크래시 루프 발생했던 버그 수정
 }
 
 

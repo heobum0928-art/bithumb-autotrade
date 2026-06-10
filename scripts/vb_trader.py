@@ -86,7 +86,7 @@ VB_SL                = -0.02           # 손절 한도 -2%
 VB_TRAIL_ACTIVATE    = 0.05            # 트레일링 스탑 활성화 기준 +5%
 VB_TRAIL_PCT         = 0.03            # 트레일링 스탑 폭 — 고점 대비 -3%
 VB_ENTRY_KRW         = 400_000         # 1회 진입금액 (40만원)
-MIN_DAILY_VOLUME_KRW = 20_000_000_000  # 볼륨 화이트리스트 기준 (20억 KRW)
+MIN_DAILY_VOLUME_KRW = 2_000_000_000   # 볼륨 화이트리스트 기준 (20억 KRW) — 2026-06-10 200억→20억 (원래 설계 의도 복원)
 BTC_WEAK_FILTER      = -0.015          # BTC 24h 이하면 진입 차단 (잠정, 10신호 후 재평가)
 SCAN_SEC             = 2               # 가격 스캔 주기 (초)
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
@@ -432,8 +432,8 @@ def run() -> None:
                         continue
                     # BTC 약세 필터: BTC 24h -1.5% 이하면 진입 스킵 (조회 실패 시 fail-open)
                     try:
-                        btc_info   = client.get_price("BTC")
-                        btc_chg24h = btc_info.get("signed_change_rate", None)
+                        btc_info   = client.get_ticker("BTC")
+                        btc_chg24h = float(btc_info["fluctate_rate_24H"]) / 100.0
                     except Exception as e:
                         btc_chg24h = None
                         log.warning(f"[BTC필터] 조회 실패 — 필터 생략하고 진입 허용: {e}")

@@ -224,6 +224,9 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 | 2026-06-08 | vb_trader.py | 재진입 규칙 | 당일 1코인 1회 | SL 후 차단 / 익절 후 허용 | 손절난 코인 재진입 방지 + 수익 코인 2파 포착 |
 | 2026-06-09 | vb_trader.py | 늦은진입 필터 | 없음 | 목표가 +3% 초과 시 스킵 | 자정 직후 등 이미 많이 오른 코인 추격매수 방지 |
 | 2026-06-10 | vb_trader.py | BTC약세 필터 | 없음 | BTC 24h ≤ -1.5% 시 진입 차단 | SL 3건 전부 BTC 약세일 — 레짐 필터, 잠정 기준 (10신호 후 재평가), fail-open |
+| 2026-06-10 | vb_trader.py | MIN_DAILY_VOLUME_KRW | 200억 | 20억 | 원래 설계 의도(2026-05-30 20억 신설) 복원 — 코드 오타로 200억이었음. 화이트리스트 8개→40개, HIVE급 중형 코인 포함 |
+| 2026-06-10 | vb_trader.py | BTC약세 필터 버그수정 | client.get_price (없는 메서드) | client.get_ticker + fluctate_rate_24H | fail-open으로 필터 무력화 → B3 진입 (BTC -2.41%인데 차단 안 됨). 수정 후 정상 작동 |
+| 2026-06-10 | watchdog.py | KILL_KEYWORDS vb_trader | "--dry-run" | 제거 | --live 인스턴스를 못 죽여 싱글톤 포트 충돌 크래시 루프 발생 — 키워드 제거로 해결 |
 
 ### 동결 파라미터와의 관계
 - vb_trader.py는 alt_monitor.py의 OVERSOLD 전략과 **완전히 별개**다.
