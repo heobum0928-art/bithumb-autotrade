@@ -37,7 +37,8 @@ BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
-    "vb_trader":             ROOT / "scripts" / "vb_trader.py",        # 변동성 돌파 실거래
+    "vb_trader":             ROOT / "scripts" / "vb_trader.py",        # 변동성 돌파 (모의)
+    "retest_trader":         ROOT / "scripts" / "retest_trader.py",    # 돌파-재테스트 전략 B (모의 검증 중)
 }
 
 
@@ -62,6 +63,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "claude_screener_watch": ["--watch-mode"],
     "swing_monitor":         ["--loop"],
     "vb_trader":             ["--dry-run"],   # 2026-06-11 모의 전환 — 백테스트 감사 결과 음의 기대값 확정, 관망 모드
+    "retest_trader":         ["--dry-run"],   # 합격선(모의30건+, 평균>0) 통과 전 실거래 금지
     "claude_intelligence":   [],              # 2026-06-10 dry-run 전환 — 검증 전 실거래 금지 원칙
 }
 
@@ -166,24 +168,47 @@ def run_ai_analyze() -> None:
 LOCKFILE = ROOT / "data" / "watchdog.pid"
 
 
-def main() -> None:
-    # 기존 워치독 프로세스 모두 종료 후 인수인계 (중복 재시작 루프 방지)
-    # python 프로세스만 대상 — 셸 래퍼(bash -c "...watchdog.py")를 오인 종료하면
-    # 부모가 죽으면서 자신도 SIGTERM을 받는 자살 버그가 있었음 (2026-06-11)
-    for p in psutil.process_iter(["pid", "cmdline", "name"]):
+_wd_sock = None  # GC 방지
+
+
+def _acquire_singleton() -> None:
+    """포트 바인딩 싱글톤 — OS 원자적 보장으로 상호 킬 레이스 불가.
+    포트를 못 잡으면 기존 워치독을 정리하고 재시도. (2026-06-11:
+    프로세스 스캔 방식은 동시 기동 시 서로를 죽이는 레이스가 있었음)"""
+    import socket
+    global _wd_sock
+    for attempt in range(10):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
         try:
-            if "python" not in (p.info["name"] or "").lower():
-                continue
-            parts = p.info["cmdline"] or []
-            if any(str(c).endswith("watchdog.py") for c in parts) and p.pid != os.getpid():
-                log.warning(f"기존 워치독 PID {p.pid} 종료")
-                p.terminate()
+            s.bind(("127.0.0.1", 47230))  # watchdog 전용 포트
+            _wd_sock = s
+            atexit.register(s.close)
+            return
+        except OSError:
+            s.close()
+            log.warning(f"포트 47230 사용 중 — 기존 워치독 정리 후 재시도 ({attempt+1}/10)")
+            for p in psutil.process_iter(["pid", "cmdline", "name"]):
                 try:
-                    p.wait(timeout=5)
-                except psutil.TimeoutExpired:
-                    p.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+                    if "python" not in (p.info["name"] or "").lower():
+                        continue
+                    parts = p.info["cmdline"] or []
+                    if any(str(c).endswith("watchdog.py") for c in parts) and p.pid != os.getpid():
+                        log.warning(f"기존 워치독 PID {p.pid} 종료")
+                        p.terminate()
+                        try:
+                            p.wait(timeout=5)
+                        except psutil.TimeoutExpired:
+                            p.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            time.sleep(3)
+    log.error("싱글톤 포트 획득 실패 — 종료")
+    sys.exit(1)
+
+
+def main() -> None:
+    _acquire_singleton()
     LOCKFILE.write_text(str(os.getpid()))
     atexit.register(lambda: LOCKFILE.unlink(missing_ok=True))
 
