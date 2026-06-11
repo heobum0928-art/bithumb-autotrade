@@ -61,7 +61,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "claude_screener_dry":   ["--dry-run"],
     "claude_screener_watch": ["--watch-mode"],
     "swing_monitor":         ["--loop"],
-    "vb_trader":             ["--live"],      # 실거래 모드
+    "vb_trader":             ["--dry-run"],   # 2026-06-11 모의 전환 — 백테스트 감사 결과 음의 기대값 확정, 관망 모드
     "claude_intelligence":   [],              # 2026-06-10 dry-run 전환 — 검증 전 실거래 금지 원칙
 }
 
@@ -77,8 +77,10 @@ KILL_KEYWORDS: dict[str, str] = {
 def kill_existing(name: str) -> None:
     extra_kw = KILL_KEYWORDS.get(name)
     script_kw = "claude_screener.py" if "screener" in name else f"{name}.py"
-    for p in psutil.process_iter(["pid", "cmdline"]):
+    for p in psutil.process_iter(["pid", "cmdline", "name"]):
         try:
+            if "python" not in (p.info["name"] or "").lower():
+                continue  # 셸 래퍼 오인 종료 방지
             parts = p.info["cmdline"] or []
             # 스크립트 파일명이 독립 인자로 있을 때만 매칭 (문자열 내부 포함 방지)
             match = any(part.endswith(script_kw) for part in parts)
@@ -166,8 +168,12 @@ LOCKFILE = ROOT / "data" / "watchdog.pid"
 
 def main() -> None:
     # 기존 워치독 프로세스 모두 종료 후 인수인계 (중복 재시작 루프 방지)
-    for p in psutil.process_iter(["pid", "cmdline"]):
+    # python 프로세스만 대상 — 셸 래퍼(bash -c "...watchdog.py")를 오인 종료하면
+    # 부모가 죽으면서 자신도 SIGTERM을 받는 자살 버그가 있었음 (2026-06-11)
+    for p in psutil.process_iter(["pid", "cmdline", "name"]):
         try:
+            if "python" not in (p.info["name"] or "").lower():
+                continue
             parts = p.info["cmdline"] or []
             if any(str(c).endswith("watchdog.py") for c in parts) and p.pid != os.getpid():
                 log.warning(f"기존 워치독 PID {p.pid} 종료")
