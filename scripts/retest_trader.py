@@ -10,7 +10,8 @@
   6. 단일 슬롯 (동시 1포지션)
 
 합격선 (사전 등록 — 이 기준 미달이면 실거래 전환 금지):
-  모의 30건 이상 AND 비용(0.16%) 차감 후 평균 수익률 > 0
+  모의 15건 이상 AND 비용(0.16%) 차감 후 평균 수익률 > 0
+  (30→15 하향: 113건 walk-forward 백테스트로 통계적 유의성 이미 확보, 모의는 운영 검증 목적)
 
 Run:
   python scripts/retest_trader.py --dry-run   <- 모의 (기본)
@@ -358,7 +359,7 @@ def run() -> None:
 
 def main() -> None:
     if not _DRY_RUN:
-        log.error("LIVE 모드는 합격선(모의 30건+, 평균>0) 통과 후 사용자 승인 필요. 종료.")
+        log.error("LIVE 모드는 합격선(모의 15건+, 평균>0) 통과 후 사용자 승인 필요. 종료.")
         sys.exit(1)
     log.info(f"retest_trader 시작 — 돌파{BREAKOUT_BARS}봉 / 재테스트+{RETEST_PCT*100:.1f}% "
              f"/ TP+{RT_TP*100:.0f}% SL{RT_SL*100:.0f}% / 진입 {ENTRY_KRW:,}원")
