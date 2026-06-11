@@ -218,9 +218,9 @@ _CLAUDE_CWD = str(_ROOT.parent)  # c:\code\ — CLAUDE.md 없는 상위 디렉�
 
 
 def _run_claude(prompt: str) -> str:
-    """claude CLI 호출 (Max 요금제). cwd를 프로젝트 밖으로 설정해 CLAUDE.md 미로드."""
+    """claude CLI 호출 (Haiku — 토큰 절약). cwd를 프로젝트 밖으로 설정해 CLAUDE.md 미로드."""
     result = subprocess.run(
-        ["claude", "-p", prompt],
+        ["claude", "-p", prompt, "--model", "claude-haiku-4-5-20251001"],
         capture_output=True, text=True, encoding="utf-8",
         timeout=CLAUDE_TIMEOUT, cwd=_CLAUDE_CWD,
     )
@@ -228,9 +228,9 @@ def _run_claude(prompt: str) -> str:
 
 
 def _run_claude_sonnet(prompt: str) -> str:
-    """Judge용 — 같은 CLI, 같은 cwd."""
+    """Judge용 — Haiku로 통일."""
     result = subprocess.run(
-        ["claude", "-p", prompt],
+        ["claude", "-p", prompt, "--model", "claude-haiku-4-5-20251001"],
         capture_output=True, text=True, encoding="utf-8",
         timeout=CLAUDE_TIMEOUT, cwd=_CLAUDE_CWD,
     )
