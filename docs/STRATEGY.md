@@ -89,6 +89,7 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 | OVERSOLD RSI 상한 리셋 | **버그픽스 (2026-05-30)** | watching 중 RSI>50이면 idle 리셋 | 5분 스캔 간격 사이에 RSI가 17→78로 급등 시 과매수 구간에 진입하는 로직 오류 수정. ALLO(78.4), REQ(53.3) 방지. |
 | OVERSOLD_BE_TRIGGER | **+1% 신설 (2026-05-30)** | 브레이크이븐 스탑 추가 | 진입 후 +1% 도달 시 손절선을 진입가(0%)로 올림. BOBA/XLM처럼 플러스 봤다가 손절 나는 패턴 방지. TRAIL_ACTIVATE 미달 구간 보호. |
 | retest MAJORS_EXCLUDE | **{BTC,ETH,XRP,SOL,ADA,DOGE} 신설 (2026-06-13)** | 거래대금상위 → 대형주 제외 잡코인 한정 | 10팀 에이전트 합의(9/10 찬성). retest(돌파-재테스트)는 변동성 낮은 메이저에서 구조적 손실 — 백테스트 코인분해 BTC -1.9%/ETH -2.4%, 수익은 ALLO/HOME/MOVE 등 중소형 집중. 봇이 거래대금상위라 BTC만 잡던 유니버스 미스매치 교정. 게이트 15건·파라미터(288봉/TP6%/SL-3%)는 불변. |
+| retest 청산방식 | **트레일3%(+1%발동) (2026-06-13)** | TP+6% 자르기 → 트레일링 | walk-forward 60/40 검증: 같은 retest 진입에 청산만 비교. TEST out-of-sample TP+6% +64.2%(MDD41%) vs 트레일3% +128.1%(MDD31%, 최대이익+20.5%). 편중도 개선(ALLO 42%→HOME 29%, 여러코인 분산). 사용자 "패해도 되지만 많이 먹고 빠지기" 철학을 데이터로 검증. RT_TP 제거, RT_TRAIL=0.03/ACTIVATE=0.01 신설. 검증스크립트 scripts/_retest_trail_compare.py. |
 
 ---
 

@@ -83,8 +83,9 @@ log = logging.getLogger(__name__)
 # ── 전략 상수 (백테스트 train 선택값 그대로 — 임의 변경 금지) ────────────────────
 BREAKOUT_BARS        = 288             # 24h = 288 × 5분봉
 RETEST_PCT           = 0.005           # 진입 목표 = 돌파레벨 × 1.005
-RT_TP                = 0.06            # +6%
-RT_SL                = -0.03           # -3%
+RT_SL                = -0.03           # -3% (초기 손절, 트레일 활성화 전)
+RT_TRAIL             = 0.03            # 트레일링 폭 — 고점 대비 3% 하락 시 청산
+RT_TRAIL_ACTIVATE    = 0.01            # 진입 +1% 도달 시 트레일 활성 (그 전엔 SL만)
 TIMEOUT_BARS         = 288             # 진입 후 24h 미청산 시 타임아웃 청산
 RETEST_WINDOW_BARS   = 288             # 돌파 후 24h 내 재테스트 없으면 무효
 ENTRY_KRW            = 400_000
@@ -352,14 +353,20 @@ def run() -> None:
                     pos["highest"] = cur
                     save_json(POS_PATH, pos)
                 entry = pos["entry_price"]
+                high = pos.get("highest", entry)
                 pnl = (cur - entry) / entry
+                gain_high = (high - entry) / entry           # 고점 도달률
+                activated = gain_high >= RT_TRAIL_ACTIVATE   # +1% 넘으면 트레일 가동
+                sl_px = entry * (1 + RT_SL)
+                trail_px = high * (1 - RT_TRAIL)
                 timed_out = datetime.now(KST) > datetime.fromisoformat(pos["timeout_at"])
-                if pnl >= RT_TP:
-                    record_exit(pos, entry * (1 + RT_TP), f"TP+{RT_TP*100:.0f}%")
+                if activated and cur <= max(sl_px, trail_px):
+                    stop = max(sl_px, trail_px)
+                    record_exit(pos, stop, f"트레일{RT_TRAIL*100:.0f}% (고점{gain_high*100:+.1f}%→{pnl*100:+.1f}%)")
                     pos = None
                     save_json(POS_PATH, None)
-                elif pnl <= RT_SL:
-                    record_exit(pos, entry * (1 + RT_SL), f"SL{RT_SL*100:.0f}% ({pnl*100:+.1f}%)")
+                elif not activated and pnl <= RT_SL:
+                    record_exit(pos, sl_px, f"SL{RT_SL*100:.0f}% ({pnl*100:+.1f}%)")
                     pos = None
                     save_json(POS_PATH, None)
                 elif timed_out:
@@ -382,7 +389,7 @@ def main() -> None:
         log.error("LIVE 모드는 합격선(모의 15건+, 평균>0) 통과 후 사용자 승인 필요. 종료.")
         sys.exit(1)
     log.info(f"retest_trader 시작 — 돌파{BREAKOUT_BARS}봉 / 재테스트+{RETEST_PCT*100:.1f}% "
-             f"/ TP+{RT_TP*100:.0f}% SL{RT_SL*100:.0f}% / 진입 {ENTRY_KRW:,}원")
+             f"/ 트레일{RT_TRAIL*100:.0f}%(+{RT_TRAIL_ACTIVATE*100:.0f}%발동) SL{RT_SL*100:.0f}% / 진입 {ENTRY_KRW:,}원")
     run()
 
 
