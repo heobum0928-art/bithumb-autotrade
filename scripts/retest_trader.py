@@ -91,6 +91,10 @@ ENTRY_KRW            = 400_000
 TOPN                 = 50
 MIN_DAILY_VOLUME_KRW = 2_000_000_000
 STABLECOIN_EXCLUDE   = {"USDT", "USDC", "DAI", "TUSD", "BUSD", "FDUSD"}
+# 변동성 낮은 시총 톱 메이저 — retest(돌파-재테스트)가 구조적으로 못 먹음.
+# 백테스트 코인분해: BTC -1.9%, ETH -2.4% 등 대형주 전부 손실. 수익은 중소형 잡코인 집중.
+# 10팀 에이전트 합의로 제외 (2026-06-13).
+MAJORS_EXCLUDE       = {"BTC", "ETH", "XRP", "SOL", "ADA", "DOGE"}
 SCAN_SEC             = 5
 CANDLE_REFRESH_SEC   = 300             # 5분마다 완성봉 갱신
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
@@ -99,19 +103,19 @@ STATE_PATH           = Path("data/retest_state.json")   # 돌파 대기 상태
 
 # ── 화이트리스트 ──────────────────────────────────────────────────────────────
 def build_whitelist(client: BithumbClient) -> list[str]:
-    """거래대금 상위 TOPN (20억+, 스테이블 제외)."""
+    """거래대금 상위 TOPN (20억+, 스테이블·대형주 제외 — 중소형 잡코인 한정)."""
     try:
         tickers = client.get_ticker("ALL")
         rows = []
         for coin, d in tickers.items():
-            if coin == "date" or coin in STABLECOIN_EXCLUDE:
+            if coin == "date" or coin in STABLECOIN_EXCLUDE or coin in MAJORS_EXCLUDE:
                 continue
             vol = float(d.get("acc_trade_value_24H", 0))
             if vol >= MIN_DAILY_VOLUME_KRW:
                 rows.append((coin, vol))
         rows.sort(key=lambda x: -x[1])
         wl = [c for c, _ in rows[:TOPN]]
-        log.info(f"[화이트리스트] {len(wl)}개 (상위 {TOPN}, 20억+)")
+        log.info(f"[화이트리스트] {len(wl)}개 (상위 {TOPN}, 20억+, 대형주 {len(MAJORS_EXCLUDE)}종 제외)")
         return wl
     except Exception as e:
         log.warning(f"[화이트리스트] 갱신 실패: {e}")
