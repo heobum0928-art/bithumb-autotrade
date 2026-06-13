@@ -121,6 +121,16 @@ def build_whitelist(client: BithumbClient) -> list[str]:
         log.warning(f"[화이트리스트] 갱신 실패: {e}")
         return []
 
+def _ws_symbols(whitelist: list[str], pos: dict | None) -> list[str]:
+    """WS 구독 심볼 = 화이트리스트 + 보유 포지션 코인.
+    포지션 코인이 유니버스(대형주 제외 등)에서 빠져도 시세는 받아야 청산 가능."""
+    syms = [f"{c}_KRW" for c in whitelist]
+    if pos and pos.get("coin"):
+        ps = f"{pos['coin']}_KRW"
+        if ps not in syms:
+            syms.append(ps)
+    return syms
+
 # ── 포지션/상태 I/O ───────────────────────────────────────────────────────────
 def load_json(path: Path) -> dict | None:
     if not path.exists():
@@ -246,7 +256,7 @@ def run() -> None:
     last_candle_check = 0.0
 
     if whitelist:
-        tracker.start_ws([f"{c}_KRW" for c in whitelist])
+        tracker.start_ws(_ws_symbols(whitelist, pos))
         time.sleep(5)
 
     log.info(f"시작 | 모드={'DRY-RUN' if _DRY_RUN else 'LIVE'} | 감시 {len(whitelist)}개 "
@@ -263,7 +273,7 @@ def run() -> None:
                 whitelist = build_whitelist(client)
                 tracker.stop_ws()
                 if whitelist:
-                    tracker.start_ws([f"{c}_KRW" for c in whitelist])
+                    tracker.start_ws(_ws_symbols(whitelist, pos))
                     time.sleep(5)
 
             # ① 5분마다: 완성봉 기준 돌파 감지 → pending 등록
@@ -329,6 +339,12 @@ def run() -> None:
             elif pos is not None:
                 coin = pos["coin"]
                 cur = tracker.get(coin)
+                if cur <= 0:
+                    # WS 미구독/일시단절 시 REST 폴백 — 보유 포지션 청산이 막히지 않게
+                    try:
+                        cur = float(client.get_ticker(coin).get("closing_price", 0))
+                    except Exception:
+                        cur = 0
                 if cur <= 0:
                     time.sleep(SCAN_SEC)
                     continue
