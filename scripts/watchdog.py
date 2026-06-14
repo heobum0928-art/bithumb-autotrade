@@ -172,39 +172,24 @@ _wd_sock = None  # GC 방지
 
 
 def _acquire_singleton() -> None:
-    """포트 바인딩 싱글톤 — OS 원자적 보장으로 상호 킬 레이스 불가.
-    포트를 못 잡으면 기존 워치독을 정리하고 재시도. (2026-06-11:
-    프로세스 스캔 방식은 동시 기동 시 서로를 죽이는 레이스가 있었음)"""
+    """포트 바인딩 싱글톤 — 이미 watchdog가 포트를 점유 중이면 새 인스턴스가
+    스스로 종료한다(기존을 살림). 과거 '포트 못 잡으면 기존을 죽이고 차지' 방식은
+    동시 기동 시 상호 킬 레이스로 watchdog가 여러 개 공존하는 버그가 있었음
+    (2026-06-14: PC 재부팅 누적으로 watchdog 5개 → 각자 봇을 띄워 봇 중복 사건).
+    PC 재부팅 시엔 OS가 포트를 회수하므로 새 watchdog가 정상적으로 점유한다."""
     import socket
     global _wd_sock
-    for attempt in range(10):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
-        try:
-            s.bind(("127.0.0.1", 47230))  # watchdog 전용 포트
-            _wd_sock = s
-            atexit.register(s.close)
-            return
-        except OSError:
-            s.close()
-            log.warning(f"포트 47230 사용 중 — 기존 워치독 정리 후 재시도 ({attempt+1}/10)")
-            for p in psutil.process_iter(["pid", "cmdline", "name"]):
-                try:
-                    if "python" not in (p.info["name"] or "").lower():
-                        continue
-                    parts = p.info["cmdline"] or []
-                    if any(str(c).endswith("watchdog.py") for c in parts) and p.pid != os.getpid():
-                        log.warning(f"기존 워치독 PID {p.pid} 종료")
-                        p.terminate()
-                        try:
-                            p.wait(timeout=5)
-                        except psutil.TimeoutExpired:
-                            p.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            time.sleep(3)
-    log.error("싱글톤 포트 획득 실패 — 종료")
-    sys.exit(1)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    try:
+        s.bind(("127.0.0.1", 47230))  # watchdog 전용 포트
+        s.listen(1)                   # listen까지 해서 확실히 점유 (LISTEN 상태로 가시화)
+        _wd_sock = s
+        atexit.register(s.close)
+    except OSError:
+        s.close()
+        log.warning("포트 47230 이미 사용 중 — watchdog 이미 실행 중이므로 새 인스턴스 종료")
+        sys.exit(0)
 
 
 def main() -> None:
