@@ -137,7 +137,11 @@ def load_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        # 빈 dict {}·null·falsy → None 정규화. 청산 분기가 'pos is not None'으로
+        # 판정하므로 {}가 들어오면 "포지션 있음"으로 오해해 pos['coin'] KeyError 크래시.
+        # (2026-06-14: pos.json을 {}로 비웠다가 재시작 크래시 위험 발견)
+        return data if data else None
     except Exception:
         return None
 
