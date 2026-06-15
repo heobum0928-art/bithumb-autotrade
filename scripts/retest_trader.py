@@ -86,6 +86,8 @@ RETEST_PCT           = 0.005           # 진입 목표 = 돌파레벨 × 1.005
 RT_SL                = -0.03           # -3% (초기 손절, 트레일 활성화 전)
 RT_TRAIL             = 0.03            # 트레일링 폭 — 고점 대비 3% 하락 시 청산
 RT_TRAIL_ACTIVATE    = 0.01            # 진입 +1% 도달 시 트레일 활성 (그 전엔 SL만)
+RT_SLOTS             = 3              # 동시 보유 슬롯(같은 코인은 1슬롯). 데이터 검증 2026-06-15:
+#   타코인 간 상관 ρ≈0.02(거의 독립), MDD 30.8→21.6%, 상관보정 t2.14. 검증 표본 2배 가속.
 TIMEOUT_BARS         = 288             # 진입 후 24h 미청산 시 타임아웃 청산
 RETEST_WINDOW_BARS   = 288             # 돌파 후 24h 내 재테스트 없으면 무효
 ENTRY_KRW            = 400_000
@@ -122,14 +124,15 @@ def build_whitelist(client: BithumbClient) -> list[str]:
         log.warning(f"[화이트리스트] 갱신 실패: {e}")
         return []
 
-def _ws_symbols(whitelist: list[str], pos: dict | None) -> list[str]:
-    """WS 구독 심볼 = 화이트리스트 + 보유 포지션 코인.
+def _ws_symbols(whitelist: list[str], positions: list[dict]) -> list[str]:
+    """WS 구독 심볼 = 화이트리스트 + 보유 포지션 코인들.
     포지션 코인이 유니버스(대형주 제외 등)에서 빠져도 시세는 받아야 청산 가능."""
     syms = [f"{c}_KRW" for c in whitelist]
-    if pos and pos.get("coin"):
-        ps = f"{pos['coin']}_KRW"
-        if ps not in syms:
-            syms.append(ps)
+    for pos in (positions or []):
+        if pos and pos.get("coin"):
+            ps = f"{pos['coin']}_KRW"
+            if ps not in syms:
+                syms.append(ps)
     return syms
 
 # ── 포지션/상태 I/O ───────────────────────────────────────────────────────────
@@ -145,12 +148,40 @@ def load_json(path: Path) -> dict | None:
     except Exception:
         return None
 
-def save_json(path: Path, data: dict | None) -> None:
+def load_positions() -> list[dict]:
+    """포지션 리스트 로드. 단일 dict(구버전)→[dict] 마이그레이션, None/빈→[].
+    누락 키(timeout_at/highest)는 방어적으로 보정 — 구버전/손상 dict가 재시작 후
+    청산 루프에서 KeyError 크래시로 청산이 영구 차단되는 것을 방지."""
+    data = load_json(POS_PATH)
+    if not data:
+        return []
+    items = [data] if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    out = []
+    for p in items:
+        if not p or not p.get("coin"):
+            continue
+        p.setdefault("highest", p.get("entry_price"))
+        if "timeout_at" not in p:
+            try:
+                base = datetime.fromisoformat(p["entered_at"])
+                if base.tzinfo is None:
+                    base = base.replace(tzinfo=KST)
+            except Exception:
+                base = datetime.now(KST)
+            p["timeout_at"] = (base + timedelta(hours=24)).isoformat()
+        out.append(p)
+    return out
+
+def save_json(path: Path, data) -> None:
     path.parent.mkdir(exist_ok=True)
-    if data is None:
+    if data is None or data == [] or data == {}:
         path.unlink(missing_ok=True)
-    else:
-        path.write_text(json.dumps(data, default=str), encoding="utf-8")
+        return
+    # 원자적 쓰기: temp 파일에 쓰고 os.replace로 교체 — 쓰기 도중 PC 다운 시
+    # 손상된 JSON이 남아 load 실패 → 포지션 전량 소실되는 것을 방지 (2026-06-15 멀티슬롯)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, default=str), encoding="utf-8")
+    os.replace(tmp, path)
 
 # ── 실시간 가격 (WS) ──────────────────────────────────────────────────────────
 class PriceTracker:
@@ -256,16 +287,17 @@ def run() -> None:
     whitelist = build_whitelist(client)
     # 돌파 대기 상태: {coin: {"level": float, "target": float, "expires": iso}}
     pending: dict[str, dict] = (load_json(STATE_PATH) or {})
-    pos: dict | None = load_json(POS_PATH)
+    positions: list[dict] = load_positions()
     wl_date = date.today()
     last_candle_check = 0.0
 
     if whitelist:
-        tracker.start_ws(_ws_symbols(whitelist, pos))
+        tracker.start_ws(_ws_symbols(whitelist, positions))
         time.sleep(5)
 
+    _held = ",".join(p["coin"] for p in positions) if positions else "없음"
     log.info(f"시작 | 모드={'DRY-RUN' if _DRY_RUN else 'LIVE'} | 감시 {len(whitelist)}개 "
-             f"| 돌파대기 {len(pending)}건 | 포지션={'있음:'+pos['coin'] if pos else '없음'}")
+             f"| 돌파대기 {len(pending)}건 | 포지션 {len(positions)}/{RT_SLOTS} ({_held})")
     notify.send(f"[{_LOG_TAG}] retest_trader 시작 — 돌파-재테스트 전략, 감시 {len(whitelist)}개")
 
     while True:
@@ -278,14 +310,15 @@ def run() -> None:
                 whitelist = build_whitelist(client)
                 tracker.stop_ws()
                 if whitelist:
-                    tracker.start_ws(_ws_symbols(whitelist, pos))
+                    tracker.start_ws(_ws_symbols(whitelist, positions))
                     time.sleep(5)
 
-            # ① 5분마다: 완성봉 기준 돌파 감지 → pending 등록
-            if now - last_candle_check >= CANDLE_REFRESH_SEC and pos is None:
+            # ① 5분마다: 완성봉 기준 돌파 감지 → pending 등록 (슬롯 여유 있을 때)
+            if now - last_candle_check >= CANDLE_REFRESH_SEC and len(positions) < RT_SLOTS:
                 last_candle_check = now
+                held_coins = {p["coin"] for p in positions}
                 for coin in whitelist:
-                    if coin in pending:
+                    if coin in pending or coin in held_coins:   # 보유 중 코인은 재감지 안 함 (상관 차단)
                         continue
                     r = fetch_rolling_high(client, coin)
                     if not r:
@@ -315,15 +348,20 @@ def run() -> None:
                     save_json(STATE_PATH, pending)
                     log.info(f"[{coin}] 레벨 이탈 — 대기 취소 (현재 {cur:,.2f} < 레벨 {p['level']:,.2f})")
 
-            # ③ 진입: pending 코인이 목표가에 닿으면 지정가 체결 시뮬
-            if pos is None:
+            # ③ 진입: pending 코인이 목표가에 닿으면 지정가 체결 (슬롯 여유 + 같은코인 1슬롯)
+            if len(positions) < RT_SLOTS:
+                held = {p["coin"] for p in positions}
                 for coin, p in list(pending.items()):
+                    if coin in held:          # 보유 중 코인은 진입 금지 + pending 정리 (상관 누수 차단)
+                        del pending[coin]
+                        save_json(STATE_PATH, pending)
+                        continue
                     cur = tracker.get(coin)
                     if cur <= 0 or cur > p["target"]:
                         continue
                     entry_px = p["target"]   # 지정가 체결 가정
                     volume = ENTRY_KRW / entry_px
-                    pos = {
+                    new_pos = {
                         "coin": coin, "market": f"KRW-{coin}",
                         "entry_price": entry_px, "volume": volume,
                         "cost_krw": ENTRY_KRW, "highest": entry_px,
@@ -331,17 +369,18 @@ def run() -> None:
                         "level": p["level"], "mock": _DRY_RUN,
                         "timeout_at": (datetime.now(KST) + timedelta(hours=24)).isoformat(),
                     }
-                    save_json(POS_PATH, pos)
+                    positions.append(new_pos)
+                    save_json(POS_PATH, positions)
                     del pending[coin]
                     save_json(STATE_PATH, pending)
                     log.warning(f"[{coin}] 재테스트 진입 @{entry_px:,.2f} (레벨 {p['level']:,.2f}) "
-                                f"→ {'모의' if _DRY_RUN else '실거래'}")
+                                f"슬롯 {len(positions)}/{RT_SLOTS} → {'모의' if _DRY_RUN else '실거래'}")
                     notify.send(f"[{_LOG_TAG}] {coin} 진입 @{entry_px:,.2f} "
-                                f"(TP+6%/SL-3%/24h)")
-                    break
+                                f"(트레일3%/SL-3%/24h) [{len(positions)}/{RT_SLOTS}]")
+                    break  # 한 루프에 1개만 진입
 
-            # ④ 청산: TP/SL/타임아웃
-            elif pos is not None:
+            # ④ 청산: 각 보유 포지션 독립 처리 (트레일/SL/타임아웃)
+            for pos in positions[:]:
                 coin = pos["coin"]
                 cur = tracker.get(coin)
                 if cur <= 0:
@@ -351,11 +390,10 @@ def run() -> None:
                     except Exception:
                         cur = 0
                 if cur <= 0:
-                    time.sleep(SCAN_SEC)
-                    continue
+                    continue                  # 이 포지션만 스킵 (다음 포지션 계속)
                 if cur > pos.get("highest", 0):
                     pos["highest"] = cur
-                    save_json(POS_PATH, pos)
+                    save_json(POS_PATH, positions)
                 entry = pos["entry_price"]
                 high = pos.get("highest", entry)
                 pnl = (cur - entry) / entry
@@ -367,16 +405,16 @@ def run() -> None:
                 if activated and cur <= max(sl_px, trail_px):
                     stop = max(sl_px, trail_px)
                     record_exit(pos, stop, f"트레일{RT_TRAIL*100:.0f}% (고점{gain_high*100:+.1f}%→{pnl*100:+.1f}%)")
-                    pos = None
-                    save_json(POS_PATH, None)
+                    positions.remove(pos)
+                    save_json(POS_PATH, positions)
                 elif not activated and pnl <= RT_SL:
                     record_exit(pos, sl_px, f"SL{RT_SL*100:.0f}% ({pnl*100:+.1f}%)")
-                    pos = None
-                    save_json(POS_PATH, None)
+                    positions.remove(pos)
+                    save_json(POS_PATH, positions)
                 elif timed_out:
                     record_exit(pos, cur, f"타임아웃24h ({pnl*100:+.1f}%)")
-                    pos = None
-                    save_json(POS_PATH, None)
+                    positions.remove(pos)
+                    save_json(POS_PATH, positions)
 
         except KeyboardInterrupt:
             log.info("종료 요청")
