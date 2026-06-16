@@ -10,7 +10,8 @@ from datetime import date, datetime, timedelta
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 BACKUP = ROOT / "backups"
-KEEP_DAYS = 14
+KEEP_DAYS = 30          # 최근 N일은 매일 스냅샷 전부 보관
+KEEP_MONTHLY = True     # N일 넘으면 매월 1일 스냅샷만 영구 보관(나머지 정리)
 STATE_FILES = ["retest_pos.json", "active_pos.json", "loss_coins.json",
                "retest_state.json"]
 
@@ -45,6 +46,15 @@ def backup_state(stamp: str) -> int:
     return n
 
 
+def _expired(d: date, cutoff: date) -> bool:
+    """삭제 대상? 최근 KEEP_DAYS 안이면 보존. 넘으면 매월 1일만 영구 보존."""
+    if d >= cutoff:
+        return False
+    if KEEP_MONTHLY and d.day == 1:
+        return False
+    return True
+
+
 def prune():
     cutoff = date.today() - timedelta(days=KEEP_DAYS)
     removed = 0
@@ -52,7 +62,7 @@ def prune():
     for f in (BACKUP / "db").glob("trades_*.db"):
         try:
             d = datetime.strptime(f.stem.replace("trades_", ""), "%Y%m%d").date()
-            if d < cutoff:
+            if _expired(d, cutoff):
                 f.unlink(); removed += 1
         except Exception:
             pass
@@ -62,12 +72,12 @@ def prune():
         for f in sdir.iterdir():
             try:
                 d = datetime.strptime(f.name, "%Y%m%d").date()
-                if d < cutoff:
+                if _expired(d, cutoff):
                     shutil.rmtree(f); removed += 1
             except Exception:
                 pass
     if removed:
-        print(f"[정리] {KEEP_DAYS}일 초과 {removed}개 삭제")
+        print(f"[정리] 일별 {KEEP_DAYS}일 초과 {removed}개 삭제 (매월 1일·최신은 보존)")
 
 
 if __name__ == "__main__":
