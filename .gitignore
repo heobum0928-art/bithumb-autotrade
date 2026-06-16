@@ -10,3 +10,4 @@ data/*.sqlite
 data/backtest_trades.csv
 logs/*.log
 *.token
+backups/
