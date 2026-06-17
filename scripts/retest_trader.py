@@ -84,7 +84,7 @@ log = logging.getLogger(__name__)
 BREAKOUT_BARS        = 288             # 24h = 288 × 5분봉
 RETEST_PCT           = 0.005           # 진입 목표 = 돌파레벨 × 1.005
 RT_SL                = -0.03           # -3% (초기 손절, 트레일 활성화 전)
-RT_TRAIL             = 0.03            # 트레일링 폭 — 고점 대비 3% 하락 시 청산
+RT_TRAIL             = 0.02            # 트레일링 폭 — 고점 대비 2% 하락 시 청산 (2026-06-17: 3%→2%, 백테스트 t4.59 최선 + 에이전트 2팀 수렴)
 RT_TRAIL_ACTIVATE    = 0.01            # 진입 +1% 도달 시 트레일 활성 (그 전엔 SL만)
 RT_SLOTS             = 3              # 동시 보유 슬롯(같은 코인은 1슬롯). 데이터 검증 2026-06-15:
 #   타코인 간 상관 ρ≈0.02(거의 독립), MDD 30.8→21.6%, 상관보정 t2.14. 검증 표본 2배 가속.
@@ -376,7 +376,7 @@ def run() -> None:
                     log.warning(f"[{coin}] 재테스트 진입 @{entry_px:,.2f} (레벨 {p['level']:,.2f}) "
                                 f"슬롯 {len(positions)}/{RT_SLOTS} → {'모의' if _DRY_RUN else '실거래'}")
                     notify.send(f"[{_LOG_TAG}] {coin} 진입 @{entry_px:,.2f} "
-                                f"(트레일3%/SL-3%/24h) [{len(positions)}/{RT_SLOTS}]")
+                                f"(트레일{RT_TRAIL*100:.0f}%/SL{RT_SL*100:.0f}%/24h) [{len(positions)}/{RT_SLOTS}]")
                     break  # 한 루프에 1개만 진입
 
             # ④ 청산: 각 보유 포지션 독립 처리 (트레일/SL/타임아웃)
