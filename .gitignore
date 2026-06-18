@@ -11,3 +11,5 @@ data/backtest_trades.csv
 logs/*.log
 *.token
 backups/
+data/candles_daily/
+data/candles_cache/
