@@ -69,10 +69,11 @@ def btc_core_signal():
             return None, "?", False
         cur = closes[-1]; sma = sum(closes[-200:]) / 200
         dist = (cur / sma - 1) * 100
-        if cur >= sma:
-            return f"코어: 보유(BULL) — BTC {cur:,.0f} ≥ 200일선 {sma:,.0f} ({dist:+.1f}%)", "BULL", True
-        near = " ⚠️트리거 근접" if dist > -5 else ""
-        return f"코어: 현금(BEAR) — BTC {cur:,.0f} < 200일선 {sma:,.0f} ({dist:+.1f}%){near}", "BEAR", False
+        trig = sma * 1.01   # 1% 확인밴드 (에이전트 검증: 밴드 없으면 휘프소로 엣지 절반 손실)
+        if cur >= trig:
+            return f"코어: 보유(BULL) — BTC {cur:,.0f} ≥ 200일선+1% {trig:,.0f} ({dist:+.1f}%)", "BULL", True
+        near = " ⚠️트리거 근접(확인밴드 대기)" if dist > -5 else ""
+        return f"코어: 현금(BEAR) — BTC {cur:,.0f} < 200일선 {sma:,.0f} (트리거 {trig:,.0f}, {dist:+.1f}%){near}", "BEAR", False
     except Exception:
         return None, "?", False
 
