@@ -98,6 +98,8 @@ MIN_VOL_KRW    = 100_000_000   # 1억 (잡주 포함하되 완전 죽은 코인 
 UNIVERSE_CAP   = 120           # API 부하 상한
 STABLECOIN_EXCLUDE = {"USDT", "USDC", "DAI", "TUSD", "BUSD", "FDUSD", "PYUSD", "USDS"}
 SMA_DAYS       = 200
+BTC_QUIET_MAX  = 0.02         # BTC 일변동 <2%(잠잠)일 때만 진입 — EM 엣지가 BTC 큰움직임엔 사라짐
+#   검증(2026-06-19): BTC±2% 내 진입 t3.91(비용0.30%) vs BTC강상승 t-0.03/급락 t-0.59. 알트 고유모멘텀은 BTC가 안휘저을 때만 먹힘
 SCAN_SEC       = 5
 WS_URL         = "wss://pubwss.bithumb.com/pub/ws"
 POS_PATH       = Path("data/em_pos.json")
@@ -153,6 +155,19 @@ def is_bear(client: BithumbClient) -> bool | None:
         return closes[1] < sum(closes[1:SMA_DAYS]) / (SMA_DAYS - 1)
     except Exception as e:
         log.warning(f"[레짐] BTC 조회 실패: {e}")
+        return None
+
+
+def btc_quiet() -> bool | None:
+    """어제 BTC 일변동 절대값 < BTC_QUIET_MAX 면 True(잠잠=진입허용). 실패 시 None."""
+    try:
+        if BTC_DAILY_FILE.exists():
+            closes = [float(x["trade_price"]) for x in json.loads(BTC_DAILY_FILE.read_text(encoding="utf-8"))]
+            if len(closes) >= 3:
+                move = closes[-1] / closes[-2] - 1   # 최근 완성일 변동
+                return abs(move) < BTC_QUIET_MAX
+        return None
+    except Exception:
         return None
 
 # ── 진입 신호 (직전 완성일 기준) ──────────────────────────────────────────────
@@ -298,6 +313,13 @@ def daily_entry_scan(client, tracker, universe, positions) -> None:
         return
     if not bear:
         log.info("[진입스캔] BULL 레짐 — 진입 전면 정지 (#24는 BEAR 전용)")
+        return
+    quiet = btc_quiet()
+    if quiet is None:
+        log.info("[진입스캔] BTC 변동성 판정 실패 — 보류")
+        return
+    if not quiet:
+        log.info("[진입스캔] BTC 변동성 게이트 차단 (어제 BTC ±2%↑ — 알트 모멘텀 신뢰불가)")
         return
     held = {p["coin"] for p in positions}
     entered = 0
