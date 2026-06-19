@@ -59,6 +59,24 @@ def btc_regime():
         return "장세 조회실패", "?"
 
 
+def btc_core_signal():
+    """코어 엔진: BTC 200일선 타이밍. (신호문구, state, 트리거여부) 반환.
+    유지 중인 일봉 파일(750일)로 200일 SMA 계산 — API 200 상한 회피."""
+    f = ROOT / "data" / "candles_daily" / "BTC_1d.json"
+    try:
+        closes = [float(x["trade_price"]) for x in json.loads(f.read_text(encoding="utf-8"))]
+        if len(closes) < 201:
+            return None, "?", False
+        cur = closes[-1]; sma = sum(closes[-200:]) / 200
+        dist = (cur / sma - 1) * 100
+        if cur >= sma:
+            return f"코어: 보유(BULL) — BTC {cur:,.0f} ≥ 200일선 {sma:,.0f} ({dist:+.1f}%)", "BULL", True
+        near = " ⚠️트리거 근접" if dist > -5 else ""
+        return f"코어: 현금(BEAR) — BTC {cur:,.0f} < 200일선 {sma:,.0f} ({dist:+.1f}%){near}", "BEAR", False
+    except Exception:
+        return None, "?", False
+
+
 def main():
     con = sqlite3.connect(str(DB))
     rt2, n2, t2 = gate(con, f"AND id>{RT_2PCT_CUTOVER_ID}", "RT 2%")
@@ -74,19 +92,27 @@ def main():
     btc = _ticker("KRW-BTC")
     btc_px = f"{btc['trade_price']:,.0f}원" if btc else "?"
 
-    # 한 줄 판정
-    if n2 >= 30 and t2 >= 2.0:
+    core_txt, core_state, core_trigger = btc_core_signal()
+
+    # 한 줄 판정 (코어 트리거 최우선)
+    if core_trigger:
+        verdict = "★★ 코어 매수 트리거! BTC 200일선 회복=강세 전환 → BTC 코어 매수 + RT 위성 부활 검토 (사용자 승인)"
+    elif n2 >= 30 and t2 >= 2.0:
         verdict = "★ RT 2% 게이트 통과! → 실거래 검토 (사용자 승인 필요)"
     elif regime == "BULL" and n2 < 30:
         verdict = "강세 전환 — RT 신호 재개 예상, 표본 빨리 쌓일 구간 (주목)"
     elif regime == "BEAR":
-        verdict = "약세 — RT 신호 드뭄, 표본 정체 예상 (대기). 현금이 포지션."
+        verdict = "약세 — 코어=현금 보존, 위성 EM(약세장)만 검증. 단타 엣지 추격 안 함."
     else:
-        verdict = "횡보 — 평소대로 검증 진행"
+        verdict = "횡보 — 코어 현금 유지, EM 검증 진행"
 
     lines = [
         f"📊 일일 전략점검 {datetime.now():%Y-%m-%d %H:%M}",
         f"BTC {btc_px} | 장세: {regime_txt}",
+    ]
+    if core_txt:
+        lines.append(core_txt)
+    lines += [
         f"{rt2}",
         f"{rt3}",
         f"최근24h RT거래: {r24}건",
