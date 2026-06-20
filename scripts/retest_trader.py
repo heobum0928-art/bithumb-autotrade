@@ -103,6 +103,22 @@ CANDLE_REFRESH_SEC   = 300             # 5분마다 완성봉 갱신
 WS_URL               = "wss://pubwss.bithumb.com/pub/ws"
 POS_PATH             = Path("data/retest_pos.json")
 STATE_PATH           = Path("data/retest_state.json")   # 돌파 대기 상태
+BTC_DAILY_FILE       = Path("data/candles_daily/BTC_1d.json")
+SMA_DAYS             = 200
+
+# ── 장세 게이트 (2026-06-21) ──────────────────────────────────────────────────
+# RT는 강세장 전용 엣지(약세장 45/30 t-1.87 불합격). 약세장엔 신규진입 정지, 강세 전환 시 재가동.
+# 청산은 게이트와 무관하게 항상 작동(보유분 보호).
+def _btc_bull() -> bool | None:
+    """BTC 종가 ≥ 200일 SMA 면 BULL(True). 실패 시 None(=판정보류, 진입 안전차단)."""
+    try:
+        if BTC_DAILY_FILE.exists():
+            closes = [float(x["trade_price"]) for x in json.loads(BTC_DAILY_FILE.read_text(encoding="utf-8"))]
+            if len(closes) >= SMA_DAYS:
+                return closes[-1] >= sum(closes[-SMA_DAYS:]) / SMA_DAYS
+        return None
+    except Exception:
+        return None
 
 # ── 화이트리스트 ──────────────────────────────────────────────────────────────
 def build_whitelist(client: BithumbClient) -> list[str]:
@@ -290,6 +306,7 @@ def run() -> None:
     positions: list[dict] = load_positions()
     wl_date = date.today()
     last_candle_check = 0.0
+    bull_state = _btc_bull()   # 장세 게이트: True=강세(진입허용) / False=약세(진입정지) / None=보류
 
     if whitelist:
         tracker.start_ws(_ws_symbols(whitelist, positions))
@@ -313,11 +330,14 @@ def run() -> None:
                     tracker.start_ws(_ws_symbols(whitelist, positions))
                     time.sleep(5)
 
-            # ① 5분마다: 완성봉 기준 돌파 감지 → pending 등록 (슬롯 여유 있을 때)
+            # ① 5분마다: 완성봉 기준 돌파 감지 → pending 등록 (강세장 + 슬롯 여유)
             if now - last_candle_check >= CANDLE_REFRESH_SEC and len(positions) < RT_SLOTS:
                 last_candle_check = now
+                bull_state = _btc_bull()   # 5분마다 장세 갱신
+                if bull_state is not True and pending:
+                    pending.clear(); save_json(STATE_PATH, pending)   # 약세/보류: 돌파대기 취소
                 held_coins = {p["coin"] for p in positions}
-                for coin in whitelist:
+                for coin in (whitelist if bull_state is True else []):  # 강세장 아니면 신규 돌파감지 정지
                     if coin in pending or coin in held_coins:   # 보유 중 코인은 재감지 안 함 (상관 차단)
                         continue
                     r = fetch_rolling_high(client, coin)
@@ -348,8 +368,8 @@ def run() -> None:
                     save_json(STATE_PATH, pending)
                     log.info(f"[{coin}] 레벨 이탈 — 대기 취소 (현재 {cur:,.2f} < 레벨 {p['level']:,.2f})")
 
-            # ③ 진입: pending 코인이 목표가에 닿으면 지정가 체결 (슬롯 여유 + 같은코인 1슬롯)
-            if len(positions) < RT_SLOTS:
+            # ③ 진입: pending 코인이 목표가에 닿으면 지정가 체결 (강세장 + 슬롯 여유 + 같은코인 1슬롯)
+            if bull_state is True and len(positions) < RT_SLOTS:
                 held = {p["coin"] for p in positions}
                 for coin, p in list(pending.items()):
                     if coin in held:          # 보유 중 코인은 진입 금지 + pending 정리 (상관 누수 차단)
