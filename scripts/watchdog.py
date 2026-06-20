@@ -40,6 +40,7 @@ BOTS = {
     "vb_trader":             ROOT / "scripts" / "vb_trader.py",        # 변동성 돌파 (모의)
     "retest_trader":         ROOT / "scripts" / "retest_trader.py",    # 돌파-재테스트 전략 B (모의 검증 중)
     "em_trader":             ROOT / "scripts" / "em_trader.py",        # #24 초기모멘텀 (약세장 전용·모의, forward 게이트 검증)
+    "igniter_alert":         ROOT / "scripts" / "igniter_alert.py",    # #31 ML 점화 알림 (알림전용·주문없음, forward 추적)
 }
 
 
