@@ -41,6 +41,7 @@ BOTS = {
     "retest_trader":         ROOT / "scripts" / "retest_trader.py",    # 돌파-재테스트 전략 B (모의 검증 중)
     "em_trader":             ROOT / "scripts" / "em_trader.py",        # #24 초기모멘텀 (약세장 전용·모의, forward 게이트 검증)
     "igniter_alert":         ROOT / "scripts" / "igniter_alert.py",    # #31 ML 점화 알림 (알림전용·주문없음, forward 추적)
+    "ml_trader":             ROOT / "scripts" / "ml_trader.py",        # #31 ML 점화 모의매매 (게이트 검증)
 }
 
 
@@ -67,6 +68,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "vb_trader":             ["--dry-run"],   # 2026-06-11 모의 전환 — 백테스트 감사 결과 음의 기대값 확정, 관망 모드
     "retest_trader":         ["--dry-run"],   # 합격선(모의30건+, 평균>0) 통과 전 실거래 금지
     "em_trader":             ["--dry-run"],   # #24 게이트(CLEAN n≥50, 비용0.30%후 t≥3, 강건성) 통과 전 실거래 금지
+    "ml_trader":             ["--dry-run"],   # #31 게이트(CLEAN n≥30, 비용0.30%후 t≥2.5, 베이스라인 초과) 통과 전 실거래 금지
     "claude_intelligence":   [],              # 2026-06-10 dry-run 전환 — 검증 전 실거래 금지 원칙
 }
 
