@@ -56,14 +56,17 @@ logging.basicConfig(level=logging.INFO, format=f"%(asctime)s [{_TAG}][%(levelnam
     handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("logs/ml_trader.log", encoding="utf-8")])
 log = logging.getLogger(__name__)
 
-# ── 전략 상수 (#31 검증값 — 동결) ──
-IG, VM = 0.03, 2.5
-ML_P = 0.70
+# ── 전략 상수 ──
+# 데이터 수집 모드(2026-06-21): 모의라 거침없이 표본 빨리. 거래는 P>=0.5로 많이 하되 확신도 기록,
+# 게이트 판정은 P>=0.7 부분집합으로 엄격 유지. 청산패키지(트레일3/SL3/4h)는 #31 검증값 동결.
+IG, VM = 0.025, 2.0
+ML_P = 0.50            # 거래 임계(데이터수집). 게이트는 P>=0.7 부분집합으로 본다
+ML_GATE_P = 0.70
 TRAIL, TRAIL_ACT, SL = 0.03, 0.015, -0.03
 TIMEOUT_H = 4
-SLOTS, ENTRY_KRW = 5, 200_000
-TOPN = 80
-COOLDOWN_MIN = 30
+SLOTS, ENTRY_KRW = 8, 200_000
+TOPN = 120
+COOLDOWN_MIN = 20
 SCAN_SEC = 45          # 점화 스캔 주기
 LOOP_SEC = 5           # 청산 감시 주기
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS"}
@@ -164,7 +167,8 @@ def record_exit(pos, px, reason):
     log.warning(f"[{pos['coin']}] 청산 @{px:,.4f} PnL={pct:+.2f}% | {reason}")
     try:
         log_trade(coin=pos["coin"], market=pos["market"], entry_price=pos["entry_price"], exit_price=px,
-                  volume=vol, cost_krw=pos["cost_krw"], received_krw=recv, exit_reason=f"[{_TAG}] {reason}",
+                  volume=vol, cost_krw=pos["cost_krw"], received_krw=recv,
+                  exit_reason=f"[{_TAG}] P{int(pos.get('prob',0)*100)} {reason}",   # 확신도 기록(게이트 분석용)
                   entered_at=datetime.fromisoformat(pos["entered_at"]).replace(tzinfo=None), exited_at=datetime.now(),
                   max_price=pos.get("highest",px))
     except Exception as e: log.error(f"[DB] {e}")
