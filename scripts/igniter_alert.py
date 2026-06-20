@@ -111,6 +111,7 @@ def main():
                     log.warning(f"{coin} 채점실패: {e}"); time.sleep(0.1); continue
                 entry=cl[i]; mult=vol[i]/avgv
                 logrow([now.strftime("%Y-%m-%d %H:%M"),coin,f"{entry:.4f}",f"{prob:.2f}",f"{bar*100:.1f}",f"{mult:.0f}"])
+                last[coin]=now   # 감지 즉시 쿨다운 — 같은 점화 중복 기록/알림 방지
                 if prob>=ALERT_P:
                     msg=(f"★ {coin} 고확신 점화 (모델 {prob*100:.0f}%)\n"
                          f"   +{bar*100:.1f}% 거래량{mult:.0f}배, 진입가 {entry:,.4f}원 ({now:%H:%M})\n"
