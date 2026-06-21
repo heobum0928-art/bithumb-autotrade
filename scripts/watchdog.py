@@ -43,6 +43,7 @@ BOTS = {
     "igniter_alert":         ROOT / "scripts" / "igniter_alert.py",    # #31 ML 점화 알림 (알림전용·주문없음, forward 추적)
     "ml_trader":             ROOT / "scripts" / "ml_trader.py",        # #31 ML 점화 모의매매 (게이트 검증)
     "core_trader":           ROOT / "scripts" / "core_trader.py",      # 코어 BTC 사이클타이밍 (검증엔진·모의 추적)
+    "hybrid_trader":         ROOT / "scripts" / "hybrid_trader.py",    # 하이브리드 약세현금/강세 BTC50%+알트Top3 (강세 forward 검증·모의)
 }
 
 
@@ -71,6 +72,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "em_trader":             ["--dry-run"],   # #24 게이트(CLEAN n≥50, 비용0.30%후 t≥3, 강건성) 통과 전 실거래 금지
     "ml_trader":             ["--dry-run"],   # #31 게이트(CLEAN n≥30, 비용0.30%후 t≥2.5, 베이스라인 초과) 통과 전 실거래 금지
     "core_trader":           ["--dry-run"],   # 코어 BTC타이밍 모의 — 실거래는 사용자 승인
+    "hybrid_trader":         ["--dry-run"],   # 하이브리드 모의 — 강세 forward 데이터 수집 전 실거래 금지
     "claude_intelligence":   [],              # 2026-06-10 dry-run 전환 — 검증 전 실거래 금지 원칙
 }
 
