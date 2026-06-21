@@ -14,6 +14,7 @@ try:
 except Exception:
     pass
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))   # bithumb 패키지 import 위해
 PY = sys.executable
 HIST = ROOT / "data" / "ml_model_history.csv"
 
@@ -31,7 +32,7 @@ def main():
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
     print(f"=== ML 재학습 {today} ===", flush=True)
 
-    ok1, o1 = run("_rebuild_cache.py", 600)
+    ok1, o1 = run("_rebuild_cache.py", 1500)   # 5m 50코인 수집 — 느려서 25분 허용
     print(f"[1] 5분봉 수집: {'OK' if ok1 else '실패'} {o1.strip()[-80:]}", flush=True)
     ok2, o2 = run("_train_igniter_model.py", 300)
     print(f"[2] 재학습: {'OK' if ok2 else '실패'} {o2.strip()[-80:]}", flush=True)
