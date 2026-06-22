@@ -62,6 +62,8 @@ ENTRY_KRW_DRY = 200_000          # 모의 1건 노셔널
 COOLDOWN_MIN = 60                # 같은 코인 재진입 쿨다운
 CYCLE = 30
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS","KRW"}
+# ★ 타겟 한정 — 펌프가 *이어지는* 검증 종목만(walk-forward). 함정(COS/STRAX/OSMO류) 원천 차단.
+TARGET = {"XLM","H","WLD","DOGE","HBAR","ICP","SAND","ALGO","ENA","SEI","PEPE","SOON","HOME","ETHFI","BTR"}
 POS = ROOT / "data" / "accum_pos.json"
 
 
@@ -121,7 +123,7 @@ def scan_entries(c, held, cooldown):
         return out
     cands = []
     for coin, d in t.items():
-        if coin == "date" or coin in STABLE or not isinstance(d, dict) or coin in held: continue
+        if coin == "date" or coin in STABLE or coin not in TARGET or not isinstance(d, dict) or coin in held: continue
         if cooldown.get(coin, 0) > time.time(): continue
         try:
             chg = float(d.get("fluctate_rate_24H", 0)); val = float(d.get("acc_trade_value_24H", 0))
@@ -150,7 +152,7 @@ def main():
             if cur and cur != "KRW" and bal > 0: EXCLUDE.add(cur)
     except Exception: pass
     mode = "🔴실전" if is_live() else "모의"
-    log.info(f"기존 보유 제외: {sorted(EXCLUDE - set(STABLE))}")
+    log.info(f"타겟 {len(TARGET)}종 한정 + 호가필터 | 기존보유 제외: {sorted(EXCLUDE - set(STABLE))}")
     log.info(f"매집 단타 시작 [{mode}] — 진입 매수우세+체결매수>{BUY_MIN} 신호 / 손절-{SL*100:.0f}% 트레일{TRAIL*100:.0f}% / 슬롯{SLOTS}")
     try: notify.send(f"🎯 매집 단타 시작 [{mode}] — 펌핑 쫓기 아니라 '지금 사 모으는' 알트만(호가+체결). 손절-3% 트레일3%")
     except Exception: pass
