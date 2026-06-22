@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 DAILY = ROOT / "data" / "candles_daily"
 SUPERVISED = ["tg_bot", "claude_intelligence", "swing_monitor", "vb_trader", "retest_trader",
               "em_trader", "igniter_alert", "ml_trader", "core_trader", "hybrid_trader",
-              "crossex_logger", "volume_radar", "accum_trader", "watchdog"]
+              "crossex_logger", "volume_radar", "accum_trader", "newlisting_monitor", "watchdog"]
 
 
 def _read_json(p, default=None):
