@@ -192,8 +192,12 @@ def role_redteam(b, ml):
     flags = []
     if ml and ml["n07"] >= 25:
         flags.append(f"ML P≥0.7 {ml['n07']}건 — 게이트(30) 근접 → 표본 30 도달 시 레드팀 소집")
-    if b and b["cur"] > b["scout_trig"]:
-        flags.append("BTC 50선 돌파 — 코어 정찰 실거래 검토 소집")
+    if b:
+        dist = (b["scout_trig"] / b["cur"] - 1) * 100   # 정찰트리거까지 남은 %
+        if b["cur"] > b["scout_trig"]:
+            flags.append("🔴 BTC 정찰트리거 돌파 — 즉시 arm 검토(live_config enabled=true → 코어 실전)")
+        elif dist <= 3:
+            flags.append(f"BTC 정찰트리거 {dist:+.1f}% 근접 — arm 결정 준비(현재 장전됨·enabled=false)")
     if not flags:
         lines.append("- 소집 트리거 없음(게이트 근접 엔진 없음). 약세 지속 시 정상.")
     else:
