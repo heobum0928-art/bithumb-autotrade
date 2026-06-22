@@ -49,6 +49,8 @@ _최종 업데이트: 2026-06-21_
 - **퀀트팀 데일리 브리핑 (2026-06-22 신설)**: CoinbaseBot_QuantTeam 작업 = 매일 08:50 scripts/quant_team.py → 4역할 렌즈(헬스·PM/리스크·리서처포인터·레드팀트리거)로 로컬데이터 점검 한 장 보고(logs/quant_team.log + docs/quant_team/ + 텔레그램). 클라우드 에이전트는 로컬 봇/데이터 접근불가라 로컬 임무는 이게 담당. 리서처=매일9시 클라우드루틴, 레드팀=후보발생시 소집.
 - **호가/체결흐름 캡처 (2026-06-22)**: igniter_alert.py가 점화 순간 호가창 깊이불균형·매수체결비를 data/micro_events.csv에 누적("고해상도 센서"). 수주 후 ML#31에 microstructure 피처 주입 예정.
 - **교차거래소 선행신호 로거 (2026-06-22)**: crossex_logger.py(포트47226, 순수로깅·매매0·격리) — 빗썸은 후행시장이라 업비트/바이낸스가 먼저 움직임. 60초마다 3거래소 일괄시세 → 타거래소 +1% 팝 순간 발산(lead) 기록 data/crossex_events.csv. 하트비트 crossex_state.json(퀀트팀 브리핑이 신선도 감시). forward 소급불가라 지금부터 수집(팀 결정). 매매는 계속 ML만(한 변수씩 — 호가→ML 먼저 검증 후 교차거래소→ML).
+- **거래대금 레이더 (2026-06-22)**: volume_radar.py(포트47227, 순수로깅·매매0·격리) — 5분스파이크만 보던 점화봇이 지속 고거래대금(TAIKO·BICO) 놓치는 빈틈 보완. 3분마다 24H거래대금÷직전20일중앙값=surge배수, ≥20배 코인 포착+호가캡처 data/volume_radar_events.csv. 핵심: 고거래대금 절반이 던짐(BICO 1619배 -27%)이라 호가로 매집vs던짐 판별. 상위급증 volume_radar_state.json→브리핑 표시.
+- **★ 실전 가드 프레임워크 (2026-06-22) — ④실행층**: bithumb/live_guard.py. 모의→실전 승격 안전배관. **기본 전면 OFF(FAIL-SAFE)**: data/live_config.json(git미추적) 없거나 enabled≠true면 무조건 모의. 4중관문(글로벌LIVE ON·엔진arm·자본가드 엔진별+전체상한·일일손실한도)+원장(live_orders.csv)+당일손익추적(live_state.json). **빗썸 API 2.0 서버측스톱 없음** → 봇다운 보호불가 → **첫 실전은 코어(일봉,스톱불필요)만**, 단타실전은 그 다음. arm=사용자가 직접 config 켜야(코드가 안 켬). 브리핑에 LIVE상태 상시표시. 검증: 기본OFF서 실매수 시도 100% 차단.
 - 상태확인: scripts/daily_strategy_report.py (코어신호+RT게이트), data/{em,ml,core}_pos.json, ml_model_history.csv.
 - 실거래 전 추가조건: 거래소측 SL주문(빗썸 Stop-Limit) + 자본가드 + 일일손실한도 + 봇다운 재기동 검증.
 

@@ -160,7 +160,16 @@ def role_pm():
     core = _read_json(ROOT / "data" / "core_state.json")
     if core:
         lines.append(f"- 코어: {core.get('state','?')}")
-    lines.append("- 실거래: 전부 OFF(모의) — 게이트 통과+사용자 승인 전까지 불변")
+    try:
+        from bithumb.live_guard import live_status
+        ls = live_status()
+        if ls["enabled"]:
+            lines.append(f"- 🔴 **실전 ON** | arm: {ls['armed']} | 전체상한 {ls['global_cap']:,}원 | "
+                         f"당일실현 {ls['realized_pnl_today']:+,.0f}원 | 노출 {ls['open_exposure']:,.0f}원")
+        else:
+            lines.append("- 실전 가드: **OFF(모의)** — 게이트 통과+사용자 승인+arm 전까지 불변")
+    except Exception:
+        lines.append("- 실거래: 전부 OFF(모의)")
     return "\n".join(lines), b, ml
 
 
