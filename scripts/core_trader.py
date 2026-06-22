@@ -32,6 +32,7 @@ ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from bithumb.client import BithumbClient
 from bithumb import notify
+from bithumb.live_guard import LiveGuard, live_status, load_config
 
 p=argparse.ArgumentParser(add_help=False); p.add_argument("--dry-run",action="store_true"); p.add_argument("--live",action="store_true")
 _DRY = not p.parse_known_args()[0].live
@@ -90,11 +91,37 @@ def rebalance(s, target_frac, price, reason):
     return True
 
 
+def live_rebalance(c, g, target_frac, price, reason, core_live_krw):
+    """실전 모드 — 실제 잔고 읽어 목표비중까지 가드 통해 실주문. 실패 시 거래 안 함(눈감고 매매 금지)."""
+    try:
+        bal = c.get_balance("BTC"); btc_units = krw_avail = 0.0
+        for a in bal:
+            if a.get("currency") == "BTC": btc_units = float(a.get("balance", 0) or 0)
+            if a.get("currency") == "KRW": krw_avail = float(a.get("balance", 0) or 0)
+    except Exception as e:
+        log.error(f"[LIVE] 잔고조회 실패 — 거래 보류: {e}"); return
+    cur_btc_krw = btc_units * price
+    target_krw = core_live_krw * target_frac
+    delta = target_krw - cur_btc_krw
+    if abs(delta) < core_live_krw * 0.1:   # 10% 미만 변화 스킵
+        log.info(f"[LIVE] 코어 {reason} — 변화작아 스킵(목표 {target_frac*100:.0f}%, delta {delta:+,.0f}원)"); return
+    if delta > 0:
+        res = g.execute_buy(c, "KRW-BTC", min(delta, krw_avail))
+    else:
+        vol = min((-delta) / price, btc_units)
+        res = g.execute_sell(c, "KRW-BTC", vol, krw_hint=-delta)
+    log.warning(f"[LIVE] 코어 {reason} — 목표 BTC {target_frac*100:.0f}%(@{price:,.0f}) → {res}")
+    try: notify.send(f"[CORE-LIVE] {reason} — BTC {target_frac*100:.0f}% 목표 @{price:,.0f} | {('실매수' if delta>0 else '실매도')} {res.get('live') and '체결' or res.get('reason','')}")
+    except Exception: pass
+
+
 def main():
-    if not _DRY: log.error("LIVE는 사용자 승인 필요."); sys.exit(1)
+    if not _DRY: log.error("--live 플래그는 차단됨. 실전은 live_guard config로만 제어."); sys.exit(1)
     c=BithumbClient(); s=load_state()
-    log.info(f"코어 시작 — 노셔널 {CORE_KRW:,}원 | SMA{SMA_FAST}>SCOUT30% / SMA{SMA_SLOW}>FULL100% / 밴드{BAND*100:.0f}% | 상태={s['state']}")
-    try: notify.send(f"[{_TAG}] core_trader 시작 — BTC 사이클타이밍 모의(SMA50→정찰30%, SMA200→풀100%, 아래→현금)")
+    _ls = live_status(); _live = bool(_ls.get("enabled")) and "core" in _ls.get("armed", [])
+    _mode = f"🔴실전(코어자본 {load_config().get('engine_caps_krw',{}).get('core',50_000):,}원)" if _live else "모의(노셔널)"
+    log.info(f"코어 시작 [{_mode}] — SMA{SMA_FAST}>SCOUT30% / SMA{SMA_SLOW}>FULL100% / 밴드{BAND*100:.0f}% | 상태={s['state']} | 가드 enabled={_ls.get('enabled')} armed={_ls.get('armed')}")
+    try: notify.send(f"[{_TAG}] core_trader 시작 — {_mode} (SMA50→정찰30%, SMA200→풀100%, 아래→현금)")
     except Exception: pass
     while True:
         try:
@@ -103,7 +130,17 @@ def main():
             above50, above200, price, s50, s200 = sig
             target_frac = FULL_FRAC if above200 else (SCOUT_FRAC if above50 else 0.0)
             new_state = "FULL" if above200 else ("SCOUT" if above50 else "CASH")
-            if new_state != s["state"]:
+            ls = live_status()
+            live = bool(ls.get("enabled")) and "core" in ls.get("armed", [])
+            if live:   # ★ 실전 모드 (가드 armed) — 실잔고 기준 실주문
+                g = LiveGuard("core")
+                core_live = load_config().get("engine_caps_krw", {}).get("core", 50_000)
+                if new_state != s["state"]:
+                    live_rebalance(c, g, target_frac, price, f"{s['state']}→{new_state}", core_live)
+                    s["state"] = new_state; save_state(s)
+                else:
+                    log.info(f"[LIVE] 유지 {s['state']} | BTC {price:,.0f}(50선 {s50:,.0f}/200선 {s200:,.0f}) | 코어자본 {core_live:,}원")
+            elif new_state != s["state"]:
                 if rebalance(s, target_frac, price, f"{s['state']}→{new_state}"):
                     s["state"]=new_state; save_state(s)
             else:
