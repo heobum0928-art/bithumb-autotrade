@@ -3,6 +3,11 @@
 P>=ALERT_P 이면 텔레그램 '★고확신 점화'. 전부 CSV 로그로 forward 추적(나중에 모델 재학습).
 근거: #31 — 모델 P>=0.7 선별이 out-of-sample +0.58% (전체 -0.85%), 순열검정 통과.
 
+★ 호가 캡처 (2026-06-22 신설 — "고해상도 센서"): 봉(OHLCV)으론 '매집 vs 덤프'가 똑같이
+보이는 게 30개 손규칙·거래량전략 실패의 근본원인. 점화 *순간* 호가창 깊이불균형 +
+최근 체결 매수/매도비를 data/micro_events.csv에 별도 누적 → 수주 뒤 ML에 microstructure
+피처로 주입해 선별 승률(38%→43% 양수전환선)을 넘는지 데이터로 판정. 생존편향 0(forward).
+
 Run: python scripts/igniter_alert.py
 """
 import sys, time, json, pickle, logging, statistics as st, csv
@@ -25,6 +30,7 @@ COOLDOWN_MIN = 30
 CYCLE_SEC = 45
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS"}
 LOGCSV = ROOT/"data"/"igniter_events.csv"
+MICROCSV = ROOT/"data"/"micro_events.csv"
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [IGNITE] %(message)s",
@@ -82,6 +88,49 @@ def logrow(row):
         w.writerow(row)
 
 
+def micro_snapshot(c, coin, levels=15, ntrades=50):
+    """점화 순간 호가창+체결흐름 스냅샷 — '매집 vs 덤프' 구분용. 실패 시 None(봇 안 깨지게)."""
+    try:
+        ob = c.get_orderbook(coin)
+        bids = [(float(b["price"]), float(b["quantity"])) for b in ob.get("bids", [])]
+        asks = [(float(a["price"]), float(a["quantity"])) for a in ob.get("asks", [])]
+        if not bids or not asks: return None
+        best_bid = max(p for p,_ in bids); best_ask = min(p for p,_ in asks)
+        mid = (best_bid+best_ask)/2 or 1e-9
+        spread_pct = (best_ask-best_bid)/mid*100
+        bids_s = sorted(bids, key=lambda x:-x[0])[:levels]   # 매수 상위(높은가)
+        asks_s = sorted(asks, key=lambda x:x[0])[:levels]    # 매도 상위(낮은가)
+        bid_krw = sum(p*q for p,q in bids_s); ask_krw = sum(p*q for p,q in asks_s)
+        tot = bid_krw+ask_krw or 1e-9
+        depth_imb = (bid_krw-ask_krw)/tot                    # +매수벽 우세(지지), -매도벽 우세(저항)
+        bid_wall = (max(p*q for p,q in bids_s)/bid_krw) if bid_krw>0 else 0   # 단일벽 집중도
+        ask_wall = (max(p*q for p,q in asks_s)/ask_krw) if ask_krw>0 else 0
+    except Exception:
+        return None
+    buy_ratio = -1.0
+    try:
+        th = c.get_transaction_history(coin, count=ntrades)
+        buy=sell=0.0
+        for t in th:
+            val=float(t["units_traded"])*float(t["price"])
+            if t.get("type")=="bid": buy+=val   # 빗썸 'bid'=매수체결
+            else: sell+=val
+        if buy+sell>0: buy_ratio = buy/(buy+sell)            # 최근 체결 매수비중(>0.5=사는중)
+    except Exception:
+        pass
+    return {"spread_pct":round(spread_pct,4), "bid_krw":int(bid_krw), "ask_krw":int(ask_krw),
+            "depth_imb":round(depth_imb,4), "bid_wall":round(bid_wall,4),
+            "ask_wall":round(ask_wall,4), "buy_ratio":round(buy_ratio,4)}
+
+
+def logmicro(time_s, coin, entry, prob, m):
+    new = not MICROCSV.exists()
+    with open(MICROCSV,"a",newline="",encoding="utf-8") as f:
+        w=csv.writer(f)
+        if new: w.writerow(["time","coin","entry","prob","spread_pct","bid_krw","ask_krw","depth_imb","bid_wall","ask_wall","buy_ratio"])
+        w.writerow([time_s,coin,entry,prob,m["spread_pct"],m["bid_krw"],m["ask_krw"],m["depth_imb"],m["bid_wall"],m["ask_wall"],m["buy_ratio"]])
+
+
 def main():
     import numpy as np
     c=BithumbClient(); wl=watchlist(c); last={}; wl_day=datetime.now(KST).date()
@@ -110,7 +159,12 @@ def main():
                 except Exception as e:
                     log.warning(f"{coin} 채점실패: {e}"); time.sleep(0.1); continue
                 entry=cl[i]; mult=vol[i]/avgv
-                logrow([now.strftime("%Y-%m-%d %H:%M"),coin,f"{entry:.4f}",f"{prob:.2f}",f"{bar*100:.1f}",f"{mult:.0f}"])
+                ts=now.strftime("%Y-%m-%d %H:%M")
+                logrow([ts,coin,f"{entry:.4f}",f"{prob:.2f}",f"{bar*100:.1f}",f"{mult:.0f}"])
+                m=micro_snapshot(c, coin)   # ★ 점화 순간 호가창+체결흐름 캡처
+                if m:
+                    logmicro(ts,coin,f"{entry:.4f}",f"{prob:.2f}",m)
+                    log.info(f"{coin} 호가스냅 — 깊이불균형{m['depth_imb']:+.2f} 매수체결비{m['buy_ratio']:.2f} 스프레드{m['spread_pct']:.2f}%")
                 last[coin]=now   # 감지 즉시 쿨다운 — 같은 점화 중복 기록/알림 방지
                 if prob>=ALERT_P:
                     msg=(f"★ {coin} 고확신 점화 (모델 {prob*100:.0f}%)\n"
