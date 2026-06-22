@@ -46,6 +46,7 @@ BOTS = {
     "hybrid_trader":         ROOT / "scripts" / "hybrid_trader.py",    # 하이브리드 약세현금/강세 BTC50%+알트Top3 (강세 forward 검증·모의)
     "crossex_logger":        ROOT / "scripts" / "crossex_logger.py",   # 교차거래소 선행신호 로거 (순수로깅·매매0, 격리)
     "volume_radar":          ROOT / "scripts" / "volume_radar.py",     # 거래대금 급증 레이더 (순수로깅·매매0, 격리)
+    "accum_trader":          ROOT / "scripts" / "accum_trader.py",     # 매집 단타 (live_guard 제어, 약세장 역추세 실전)
 }
 
 
