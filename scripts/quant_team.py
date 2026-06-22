@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 DAILY = ROOT / "data" / "candles_daily"
 SUPERVISED = ["tg_bot", "claude_intelligence", "swing_monitor", "vb_trader", "retest_trader",
               "em_trader", "igniter_alert", "ml_trader", "core_trader", "hybrid_trader",
-              "crossex_logger", "watchdog"]
+              "crossex_logger", "volume_radar", "watchdog"]
 
 
 def _read_json(p, default=None):
@@ -100,6 +100,21 @@ def role_health():
             lines.append(f"- 교차거래소 로거: 하트비트 파싱오류 | crossex_events {max(nx,0)}건")
     else:
         lines.append("- 교차거래소 로거: ⚠️ 하트비트 없음(미가동?)")
+    # 거래대금 레이더 신선도 + 오늘 급증 상위
+    vr = _read_json(ROOT / "data" / "volume_radar_state.json")
+    vx = ROOT / "data" / "volume_radar_events.csv"
+    nv = (sum(1 for _ in open(vx, encoding="utf-8", errors="replace")) - 1) if vx.exists() else 0
+    if vr:
+        try:
+            last = datetime.fromisoformat(vr["last_cycle"]); age = (datetime.now(KST) - last).total_seconds() / 60
+            fresh = "✅" if age < 10 else f"⚠️ {age:.0f}분 지연"
+            top = vr.get("top", [])[:5]
+            tops = ", ".join(f"{x['coin']} {x['surge']:.0f}배({x['chg']:+.0f}%)" for x in top)
+            lines.append(f"- 거래대금 레이더: {fresh} | 캡처 {max(nv,0)}건 | 급증 상위: {tops}")
+        except Exception:
+            lines.append(f"- 거래대금 레이더: 파싱오류 | 캡처 {max(nv,0)}건")
+    else:
+        lines.append("- 거래대금 레이더: ⚠️ 하트비트 없음(미가동?)")
     return "\n".join(lines), dead
 
 
