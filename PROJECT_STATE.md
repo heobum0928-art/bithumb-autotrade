@@ -46,6 +46,8 @@ _최종 업데이트: 2026-06-21_
 - 쿠폰 0.04% 30일마다 재등록 (얇은 엣지엔 비용=생존선).
 - 일일자동: collect_daily(06:40)·DB백업(07:13)·StrategyReport(08:08)·MLRetrain(08:30).
 - **watchdog 자동복구 (2026-06-22 신설)**: CoinbaseBot_Watchdog 작업 = 5분마다+로그인시 scripts/watchdog_keepalive.py 실행 → 포트47230 죽었으면 watchdog 분리기동. 계기 = 전체봇 다운 사건(watchdog가 도구세션에 묶여 같이 죽었는데 무알림). watchdog 죽음=텔레그램 침묵이라 이 작업이 유일한 복구수단.
+- **퀀트팀 데일리 브리핑 (2026-06-22 신설)**: CoinbaseBot_QuantTeam 작업 = 매일 08:50 scripts/quant_team.py → 4역할 렌즈(헬스·PM/리스크·리서처포인터·레드팀트리거)로 로컬데이터 점검 한 장 보고(logs/quant_team.log + docs/quant_team/ + 텔레그램). 클라우드 에이전트는 로컬 봇/데이터 접근불가라 로컬 임무는 이게 담당. 리서처=매일9시 클라우드루틴, 레드팀=후보발생시 소집.
+- **호가/체결흐름 캡처 (2026-06-22)**: igniter_alert.py가 점화 순간 호가창 깊이불균형·매수체결비를 data/micro_events.csv에 누적("고해상도 센서"). 수주 후 ML#31에 microstructure 피처 주입 예정.
 - 상태확인: scripts/daily_strategy_report.py (코어신호+RT게이트), data/{em,ml,core}_pos.json, ml_model_history.csv.
 - 실거래 전 추가조건: 거래소측 SL주문(빗썸 Stop-Limit) + 자본가드 + 일일손실한도 + 봇다운 재기동 검증.
 
