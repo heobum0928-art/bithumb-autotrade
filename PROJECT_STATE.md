@@ -45,6 +45,7 @@ _최종 업데이트: 2026-06-21_
 ## 운영 메모
 - 쿠폰 0.04% 30일마다 재등록 (얇은 엣지엔 비용=생존선).
 - 일일자동: collect_daily(06:40)·DB백업(07:13)·StrategyReport(08:08)·MLRetrain(08:30).
+- **watchdog 자동복구 (2026-06-22 신설)**: CoinbaseBot_Watchdog 작업 = 5분마다+로그인시 scripts/watchdog_keepalive.py 실행 → 포트47230 죽었으면 watchdog 분리기동. 계기 = 전체봇 다운 사건(watchdog가 도구세션에 묶여 같이 죽었는데 무알림). watchdog 죽음=텔레그램 침묵이라 이 작업이 유일한 복구수단.
 - 상태확인: scripts/daily_strategy_report.py (코어신호+RT게이트), data/{em,ml,core}_pos.json, ml_model_history.csv.
 - 실거래 전 추가조건: 거래소측 SL주문(빗썸 Stop-Limit) + 자본가드 + 일일손실한도 + 봇다운 재기동 검증.
 
