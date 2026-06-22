@@ -28,7 +28,8 @@ sys.path.insert(0, str(ROOT))
 
 DAILY = ROOT / "data" / "candles_daily"
 SUPERVISED = ["tg_bot", "claude_intelligence", "swing_monitor", "vb_trader", "retest_trader",
-              "em_trader", "igniter_alert", "ml_trader", "core_trader", "hybrid_trader", "watchdog"]
+              "em_trader", "igniter_alert", "ml_trader", "core_trader", "hybrid_trader",
+              "crossex_logger", "watchdog"]
 
 
 def _read_json(p, default=None):
@@ -86,6 +87,19 @@ def role_health():
     if ip.exists():
         n = sum(1 for _ in open(ip, encoding="utf-8", errors="replace")) - 1
         lines.append(f"- igniter_events(점화감지): {max(n,0)}건 누적")
+    # 교차거래소 로거 신선도(하트비트) + 누적
+    cs = _read_json(ROOT / "data" / "crossex_state.json")
+    cx = ROOT / "data" / "crossex_events.csv"
+    nx = (sum(1 for _ in open(cx, encoding="utf-8", errors="replace")) - 1) if cx.exists() else 0
+    if cs:
+        try:
+            last = datetime.fromisoformat(cs["last_cycle"]); age = (datetime.now(KST) - last).total_seconds() / 60
+            fresh = "✅" if age < 10 else f"⚠️ {age:.0f}분 지연"
+            lines.append(f"- 교차거래소 로거: {fresh} (사이클 {cs.get('cycles','?')}) | crossex_events {max(nx,0)}건")
+        except Exception:
+            lines.append(f"- 교차거래소 로거: 하트비트 파싱오류 | crossex_events {max(nx,0)}건")
+    else:
+        lines.append("- 교차거래소 로거: ⚠️ 하트비트 없음(미가동?)")
     return "\n".join(lines), dead
 
 

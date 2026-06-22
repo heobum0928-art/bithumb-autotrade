@@ -48,6 +48,7 @@ _최종 업데이트: 2026-06-21_
 - **watchdog 자동복구 (2026-06-22 신설)**: CoinbaseBot_Watchdog 작업 = 5분마다+로그인시 scripts/watchdog_keepalive.py 실행 → 포트47230 죽었으면 watchdog 분리기동. 계기 = 전체봇 다운 사건(watchdog가 도구세션에 묶여 같이 죽었는데 무알림). watchdog 죽음=텔레그램 침묵이라 이 작업이 유일한 복구수단.
 - **퀀트팀 데일리 브리핑 (2026-06-22 신설)**: CoinbaseBot_QuantTeam 작업 = 매일 08:50 scripts/quant_team.py → 4역할 렌즈(헬스·PM/리스크·리서처포인터·레드팀트리거)로 로컬데이터 점검 한 장 보고(logs/quant_team.log + docs/quant_team/ + 텔레그램). 클라우드 에이전트는 로컬 봇/데이터 접근불가라 로컬 임무는 이게 담당. 리서처=매일9시 클라우드루틴, 레드팀=후보발생시 소집.
 - **호가/체결흐름 캡처 (2026-06-22)**: igniter_alert.py가 점화 순간 호가창 깊이불균형·매수체결비를 data/micro_events.csv에 누적("고해상도 센서"). 수주 후 ML#31에 microstructure 피처 주입 예정.
+- **교차거래소 선행신호 로거 (2026-06-22)**: crossex_logger.py(포트47226, 순수로깅·매매0·격리) — 빗썸은 후행시장이라 업비트/바이낸스가 먼저 움직임. 60초마다 3거래소 일괄시세 → 타거래소 +1% 팝 순간 발산(lead) 기록 data/crossex_events.csv. 하트비트 crossex_state.json(퀀트팀 브리핑이 신선도 감시). forward 소급불가라 지금부터 수집(팀 결정). 매매는 계속 ML만(한 변수씩 — 호가→ML 먼저 검증 후 교차거래소→ML).
 - 상태확인: scripts/daily_strategy_report.py (코어신호+RT게이트), data/{em,ml,core}_pos.json, ml_model_history.csv.
 - 실거래 전 추가조건: 거래소측 SL주문(빗썸 Stop-Limit) + 자본가드 + 일일손실한도 + 봇다운 재기동 검증.
 

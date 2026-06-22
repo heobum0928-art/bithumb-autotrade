@@ -44,6 +44,7 @@ BOTS = {
     "ml_trader":             ROOT / "scripts" / "ml_trader.py",        # #31 ML 점화 모의매매 (게이트 검증)
     "core_trader":           ROOT / "scripts" / "core_trader.py",      # 코어 BTC 사이클타이밍 (검증엔진·모의 추적)
     "hybrid_trader":         ROOT / "scripts" / "hybrid_trader.py",    # 하이브리드 약세현금/강세 BTC50%+알트Top3 (강세 forward 검증·모의)
+    "crossex_logger":        ROOT / "scripts" / "crossex_logger.py",   # 교차거래소 선행신호 로거 (순수로깅·매매0, 격리)
 }
 
 
