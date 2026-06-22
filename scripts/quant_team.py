@@ -222,17 +222,58 @@ def main():
     outdir = ROOT / "docs" / "quant_team"; outdir.mkdir(parents=True, exist_ok=True)
     (outdir / f"{now:%Y-%m-%d}.md").write_text(report, encoding="utf-8")
 
-    # 텔레그램 요약 (핵심만)
-    head = "🔴 봇 죽음 있음! " if dead else ""
-    regime = next((l for l in pm.splitlines() if "레짐:" in l), "").replace("- ", "")
-    mlline = next((l for l in pm.splitlines() if "ML#31" in l), "").replace("- ", "")
-    tg = (f"🧠 퀀트팀 브리핑 {now:%m-%d %H:%M}\n{head}{regime}\n{mlline}\n"
-          f"{redteam.splitlines()[1] if len(redteam.splitlines())>1 else ''}")
+    # 텔레그램 요약 — 쉬운 말로 (전문용어 X)
     try:
-        from bithumb import notify
-        notify.send(tg)
+        notify.send(build_plain_tg(now, dead, b, ml))
     except Exception as e:
         print(f"(텔레그램 실패: {e})", flush=True)
+
+
+def build_plain_tg(now, dead, b, ml):
+    """누가 봐도 아는 쉬운 말 요약."""
+    L = [f"🤖 봇 현황 ({now:%m/%d %H:%M})", ""]
+    # 1) 봇 생존
+    if dead:
+        L.append(f"🔴 봇 {len(dead)}개 멈춤: {', '.join(dead)} (자동복구 시도중)")
+    else:
+        L.append("✅ 봇 13개 모두 정상")
+    # 2) 지금 뭐하고 있나 (현금/보유)
+    if b:
+        if b["cur"] > b["full_trig"]:
+            L.append("💰 지금: 비트+알트 보유 중 (강세장)")
+        elif b["cur"] > b["scout_trig"]:
+            L.append("💰 지금: 일부 매수 (전환 초입)")
+        else:
+            L.append("💰 지금: 현금 보유")
+            L.append("   (비트 약세 → 안 사는 게 정답)")
+    # 3) 실전 매수 준비 상태
+    try:
+        from bithumb.live_guard import live_status
+        from bithumb.live_guard import load_config
+        ls = live_status()
+        if ls.get("enabled"):
+            L.append(f"🔴 실전 ON — 진짜 돈 거래 중 (오늘 {ls.get('realized_pnl_today',0):+,.0f}원)")
+        elif "core" in ls.get("armed", []) and b:
+            cap = load_config().get("engine_caps_krw", {}).get("core", 0)
+            gap = (b["scout_trig"] / b["cur"] - 1) * 100
+            L.append(f"📈 실전 매수 준비됨: {cap:,}원 장전 (안전장치 ON)")
+            L.append(f"   비트 +{gap:.0f}% 오르면 → 승인 후 자동 매수")
+    except Exception:
+        pass
+    # 4) 단타 실험 (쉬운 말)
+    if ml:
+        good = ml["avg"] > 0
+        L.append(f"🧪 단타 실험(가짜돈): {ml['n']}번 중 평균 {ml['avg']:+.1f}%")
+        L.append("   " + ("✅ 수익 중" if good else "아직 손해 — 약세장이라 예상대로, 돈 안 씀"))
+    # 5) 한 줄 결론
+    L.append("")
+    if dead:
+        L.append("⚠️ 봇 점검 필요!")
+    elif b and b["cur"] > b["scout_trig"]:
+        L.append("👉 시장이 살아남 — 실전 진입 검토 시점!")
+    else:
+        L.append("👉 잘 굴러가는 중. 시장 오를 때까지 안전하게 대기.")
+    return "\n".join(L)
 
 
 if __name__ == "__main__":
