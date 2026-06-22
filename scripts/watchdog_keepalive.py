@@ -32,16 +32,21 @@ def main():
         print("watchdog 정상 (포트 47230 점유 중)")
         return
     py = sys.executable  # 작업 스케줄러가 부른 pythonw/python
+    # watchdog는 로깅에 stdout 쓰므로 pythonw가 아니라 python.exe로 띄움(단 창은 숨김)
+    if py.lower().endswith("pythonw.exe"):
+        cand = py[:-len("pythonw.exe")] + "python.exe"
+        if Path(cand).exists(): py = cand
     flags = 0
     if sys.platform == "win32":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # CREATE_NO_WINDOW: 창 숨김 + 콘솔은 있어 stdout 유효. NEW_PROCESS_GROUP: 부모 종료에 안 묶임.
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(
         [py, str(ROOT / "scripts" / "watchdog.py")],
         cwd=str(ROOT),
         creationflags=flags,
         close_fds=True,
     )
-    print("watchdog 죽음 감지 → 분리 기동 완료")
+    print("watchdog 죽음 감지 → 창 숨김 기동 완료")
 
 
 if __name__ == "__main__":

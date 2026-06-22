@@ -122,9 +122,12 @@ def start_bot(name: str, script: Path) -> subprocess.Popen:
                 pass
     log.info(f"[{name}] 시작")
     extra = EXTRA_ARGS.get(name, [])
+    # CREATE_NO_WINDOW: 콘솔창 안 띄움(봇은 파일로 로깅 → stdout 불필요). 창 클러터 방지.
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     proc = subprocess.Popen(
         [sys.executable, str(script)] + extra,
         cwd=str(ROOT),
+        creationflags=flags,
     )
     time.sleep(5)  # 새 프로세스가 lockfile 쓸 시간 확보
     return proc
