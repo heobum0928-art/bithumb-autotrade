@@ -46,12 +46,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [ACCUM] %(message)s"
     handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("logs/accum_trader.log", encoding="utf-8")])
 log = logging.getLogger(__name__)
 
-# ── 진입 파라미터 ──────────────────────────────
-MIN_CHG, MAX_CHG = 5.0, 60.0     # 24h 상승 5~60% (이미 +100%면 늦음 컷)
+# ── 진입 파라미터 (2026-06-23 완화 — 데이터 빨리, 타겟+호가는 유지) ──
+MIN_CHG, MAX_CHG = -5.0, 60.0    # 펌프 안 해도 진입(빨간장에도 호가 좋으면) — 데이터 가속
 LIQ_FLOOR = 300_000_000          # 24h 거래대금 3억+
-DEPTH_MIN = 0.10                 # 호가 매수우세
-BUY_MIN = 0.55                   # 체결 매수비중
-MOM15_MIN = 0.0                  # 최근 15분 아직 오름
+DEPTH_MIN = 0.05                 # 호가 매수우세 (0.10→0.05 완화)
+BUY_MIN = 0.52                   # 체결 매수비중 (0.55→0.52)
+MOM15_MIN = -1.0                 # 최근 15분 (0→-1 완화)
 MAX_EXT = 25.0                   # 최근 15분 +25%↑면 과열(막차) 컷
 # ── 청산 파라미터 ──────────────────────────────
 TRAIL = 0.03                     # 고점 대비 -3% 트레일
