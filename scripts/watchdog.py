@@ -48,6 +48,7 @@ BOTS = {
     "volume_radar":          ROOT / "scripts" / "volume_radar.py",     # 거래대금 급증 레이더 (순수로깅·매매0, 격리)
     "accum_trader":          ROOT / "scripts" / "accum_trader.py",     # 매집 단타 (live_guard 제어, 약세장 역추세 실전)
     "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·궤적캡처 (순수로깅, 첫펌프 데이터)
+    "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
 }
 
 
