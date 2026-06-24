@@ -42,6 +42,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [RSI] %(message)s",
 log = logging.getLogger(__name__)
 
 RSI_ENTRY = 20         # 극단 과매도 진입
+VOL_MULT = 3.0         # ★투매 필터 — 진입봉 거래대금 ≥ 20봉평균×3 (검증: 3배+ t3.70, 조용한폭락 t1.24)
 RSI_EXIT = 50          # 회복 매도
 SL = 0.05              # 손절 -5%
 TIMEOUT_H = 24
@@ -106,6 +107,15 @@ def closes_5m(c, coin, n=40):
         return None
 
 
+def candles_5m(c, coin, n=40):
+    """(closes, vols) oldest→newest — 거래량 필터용."""
+    try:
+        k = c.get_candles(f"KRW-{coin}", unit=5, count=n)[::-1]
+        return [x["trade_price"] for x in k], [float(x.get("candle_acc_trade_price", 0)) for x in k]
+    except Exception:
+        return None, None
+
+
 def price(c, coin):
     try: return float(c.get_ticker(coin)["closing_price"])
     except Exception: return 0.0
@@ -161,10 +171,14 @@ def main():
                 for coin in wl:
                     if len(pos) >= SLOTS: break
                     if coin in pos or coin in EXCLUDE or cooldown.get(coin, 0) > time.time(): continue
-                    cl = closes_5m(c, coin)
-                    if not cl: continue
+                    cl, vl = candles_5m(c, coin)
+                    if not cl or not vl: continue
                     r = rsi(cl)
                     if r is None or r >= RSI_ENTRY: continue
+                    # ★ 투매 필터 — 진입봉 거래대금이 20봉평균×VOL_MULT 이상일 때만(조용한 칼 거름)
+                    avgv = sum(vl[-21:-1]) / 20 if len(vl) >= 21 else 0
+                    vr = vl[-1] / avgv if avgv > 0 else 0
+                    if vr < VOL_MULT: continue
                     cur = cl[-1]
                     if cur <= 0: continue
                     if live:
@@ -173,10 +187,10 @@ def main():
                         vol = entry_krw*(1-0.0004)/cur
                     else:
                         vol = entry_krw/cur
-                    pos[coin] = {"entry": cur, "vol": vol, "rsi_in": r, "timeout": time.time()+TIMEOUT_H*3600, "entered": datetime.now(KST).isoformat()}
+                    pos[coin] = {"entry": cur, "vol": vol, "rsi_in": r, "vr": round(vr,1), "timeout": time.time()+TIMEOUT_H*3600, "entered": datetime.now(KST).isoformat()}
                     save_pos(pos)
-                    log.warning(f"[{mode}] 진입 {coin} @{cur:,.4f} {entry_krw:,.0f}원 — RSI {r:.0f}(과매도)")
-                    try: notify.send(f"📉 RSI반등 진입 {coin} (RSI{r:.0f} 과매도) [{mode}]")
+                    log.warning(f"[{mode}] 진입 {coin} @{cur:,.4f} {entry_krw:,.0f}원 — RSI {r:.0f} 거래량 {vr:.1f}배(투매)")
+                    try: notify.send(f"📉 RSI반등 진입 {coin} (RSI{r:.0f}, 거래량{vr:.1f}배 투매) [{mode}]")
                     except Exception: pass
             else:
                 log.info(f"[{mode}] 슬롯 {len(pos)}/{SLOTS} 보유 {list(pos)}")
