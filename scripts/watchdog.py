@@ -49,6 +49,7 @@ BOTS = {
     "accum_trader":          ROOT / "scripts" / "accum_trader.py",     # 매집 단타 (live_guard 제어, 약세장 역추세 실전)
     "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·궤적캡처 (순수로깅, 첫펌프 데이터)
     "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
+    "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
 }
 
 
