@@ -50,6 +50,7 @@ BOTS = {
     "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·궤적캡처 (순수로깅, 첫펌프 데이터)
     "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
     "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
+    "futures_logger":        ROOT / "scripts" / "futures_logger.py",   # Binance 선물 펀딩/OI/롱숏 폴링 (순수로깅·매매0, cascade 하이브리드 외부신호 #1, 청산WS 한국차단→REST대체)
 }
 
 
