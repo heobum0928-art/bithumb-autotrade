@@ -5,7 +5,7 @@
 - 최근 24h 활동량
 - 한 줄 판정 + 텔레그램 통보
 로컬 실행(봇 DB 접근 필요). 윈도우 작업 스케줄러 일일 등록."""
-import sys, sqlite3, statistics as st, urllib.request, json
+import sys, sqlite3, statistics as st, urllib.request, json, re
 from pathlib import Path
 from datetime import datetime, timedelta
 try:
@@ -39,6 +39,71 @@ def gate(con, where, label):
     wr = sum(1 for x in p if x > 0) / n * 100
     go = "GO" if (n >= 30 and t >= 2.0 and adj > 0) else "No-Go"
     return f"{label}: {n}/30 승률{wr:.0f}% 비용후{adj:+.2f}% t{t:.2f} {go}", n, t
+
+
+def cascade_status():
+    """cascade 모의 실측 게이트 추적 — 로그 파싱(DB 미기록).
+    현재 파라미터(가장 최근 '시작' 라인) 이후 청산만 fresh 표본으로 집계.
+    게이트: n≥30 AND 비용0.30%후 평균>0 AND t≥2.0 → 실거래 검토(승인필요).
+    반환: (요약문, n, t, GO여부)."""
+    log = ROOT / "logs" / "cascade_trader.log"
+    if not log.exists():
+        return "캐스케이드: 로그없음", 0, 0.0, False
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return "캐스케이드: 로그읽기실패", 0, 0.0, False
+    # 가장 최근 파라미터 시작 시각 + 파라미터 문구
+    cutover = None; param = ""
+    for ln in lines:
+        if "캐스케이드-반등 시작" in ln:
+            cutover = ln[:19]
+            m = re.search(r"(드롭[-\d.]+%\+거래량[\d.]+배)", ln)
+            param = m.group(1) if m else ""
+    pnls = []; started = cutover is None
+    for ln in lines:
+        ts = ln[:19]
+        if cutover and ts >= cutover:
+            started = True
+        if not started:
+            continue
+        if "청산" in ln:
+            m = re.search(r"PnL=([+-][\d.]+)%", ln)
+            if m:
+                pnls.append(float(m.group(1)))
+    n = len(pnls)
+    if n == 0:
+        return f"캐스케이드({param}): 0/30 — fresh 표본 대기", 0, 0.0, False
+    avg = sum(pnls) / n
+    sd = st.pstdev(pnls) if n > 1 else 0
+    adj = avg - 0.30                       # 왕복 비용 0.30%(슬리피지 스트레스)
+    t = adj / (sd / n ** 0.5) if sd else 0
+    wr = sum(1 for x in pnls if x > 0) / n * 100
+    go = (n >= 30 and t >= 2.0 and adj > 0)
+    tag = "GO" if go else "No-Go"
+    return (f"캐스케이드({param}): {n}/30 승률{wr:.0f}% 비용후{adj:+.2f}% t{t:.2f} {tag}",
+            n, t, go)
+
+
+def futures_data_status():
+    """선물 외부신호(futures_logger) 축적 진행도 — cascade 하이브리드 필터용."""
+    csv_f = ROOT / "data" / "futures_signals.csv"
+    state = ROOT / "data" / "futures_state.json"
+    if not csv_f.exists():
+        return "선물신호: 수집전"
+    try:
+        rows = sum(1 for _ in open(csv_f, encoding="utf-8")) - 1
+    except Exception:
+        rows = 0
+    last = ""
+    try:
+        s = json.loads(state.read_text(encoding="utf-8"))
+        last = s.get("last_cycle", "")[:16]
+    except Exception:
+        pass
+    # 상관분석 착수 가능선: 대략 cascade 신호와 겹치려면 며칠치(행 2000+) 필요
+    ready = "✅상관분석 가능" if rows >= 2000 else f"축적중(상관분석 ~2000행 목표)"
+    return f"선물신호: {rows}행 {ready} (최근 {last})"
 
 
 def btc_regime():
@@ -94,18 +159,22 @@ def main():
     btc_px = f"{btc['trade_price']:,.0f}원" if btc else "?"
 
     core_txt, core_state, core_trigger = btc_core_signal()
+    casc_txt, casc_n, casc_t, casc_go = cascade_status()
+    fut_txt = futures_data_status()
 
-    # 한 줄 판정 (코어 트리거 최우선)
+    # 한 줄 판정 (실거래 전환 신호 최우선 — 코어 > cascade > RT)
     if core_trigger:
         verdict = "★★ 코어 매수 트리거! BTC 200일선 회복=강세 전환 → BTC 코어 매수 + RT 위성 부활 검토 (사용자 승인)"
+    elif casc_go:
+        verdict = f"★ 캐스케이드 게이트 통과! ({casc_n}건 t{casc_t:.2f}) → 소액 실거래 검토 (사용자 승인 필요)"
     elif n2 >= 30 and t2 >= 2.0:
         verdict = "★ RT 2% 게이트 통과! → 실거래 검토 (사용자 승인 필요)"
-    elif regime == "BULL" and n2 < 30:
-        verdict = "강세 전환 — RT 신호 재개 예상, 표본 빨리 쌓일 구간 (주목)"
+    elif casc_n >= 30 and not casc_go:
+        verdict = f"캐스케이드 30건 도달했으나 미달(t{casc_t:.2f}) — 슬리피지/엣지 재검토 필요"
     elif regime == "BEAR":
-        verdict = "약세 — 코어=현금 보존, 위성 EM(약세장)만 검증. 단타 엣지 추격 안 함."
+        verdict = f"약세 — 코어=현금. 단타는 캐스케이드 모의 표본({casc_n}/30) 축적 + 선물신호 하이브리드 검증 중."
     else:
-        verdict = "횡보 — 코어 현금 유지, EM 검증 진행"
+        verdict = f"횡보/강세 — 코어 신호 대기. 캐스케이드 {casc_n}/30 축적 중."
 
     lines = [
         f"📊 일일 전략점검 {datetime.now():%Y-%m-%d %H:%M}",
@@ -114,8 +183,9 @@ def main():
     if core_txt:
         lines.append(core_txt)
     lines += [
+        f"{casc_txt}",
+        f"{fut_txt}",
         f"{rt2}",
-        f"{rt3}",
         f"최근24h RT거래: {r24}건",
         f"→ {verdict}",
     ]
@@ -126,10 +196,10 @@ def main():
     log.parent.mkdir(exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:
         f.write(msg + "\n\n")
-    # 텔레그램 통보
+    # 텔레그램 통보 (부등호는 HTML 파서가 태그로 오인 → 안전치환)
     try:
         from bithumb import notify
-        notify.send(msg)
+        notify.send(msg.replace("<", "‹").replace(">", "›"))
     except Exception as e:
         print(f"(텔레그램 통보 실패: {e})")
 

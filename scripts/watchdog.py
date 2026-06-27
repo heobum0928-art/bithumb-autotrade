@@ -184,6 +184,22 @@ def run_ai_analyze() -> None:
         log.warning(f"[ai_analyze] 예외: {e}")
 
 
+def run_daily_report() -> None:
+    """매일 전략점검 — cascade 실거래 게이트 + 선물신호 축적 + 코어/RT 한 장."""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "daily_strategy_report.py")],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", timeout=60,
+        )
+        if result.returncode == 0:
+            log.info("[daily_report] 완료")
+        else:
+            log.warning(f"[daily_report] 실패: {result.stderr[-200:]}")
+    except Exception as e:
+        log.warning(f"[daily_report] 예외: {e}")
+
+
 LOCKFILE = ROOT / "data" / "watchdog.pid"
 
 
@@ -243,11 +259,12 @@ def main() -> None:
             last_date = today
             log.info(f"[session] 날짜 변경 → {today} 세션 생성")
 
-        # 매일 00:00 KST AI 분석 자동 실행
+        # 매일 00:00 KST AI 분석 + 전략점검(cascade 게이트/선물) 자동 실행
         now_kst = datetime.now(KST)
         if (last_analysis_date != today
                 and now_kst.hour == 0 and now_kst.minute < 1):
             run_ai_analyze()
+            run_daily_report()
             last_analysis_date = today
 
         for name, script in BOTS.items():
