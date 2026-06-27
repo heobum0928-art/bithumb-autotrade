@@ -118,7 +118,7 @@ def main():
     mode = "🔴실전" if is_live() else "모의"
     wl = watchlist(c); wl_day = datetime.now(KST).date()
     log.info(f"캐스케이드-반등 시작 [{mode}] — 드롭{DROP}%+거래량{VOL_MULT}배 진입 / 손절-{SL}% 트레일{TRAIL}% | 감시{len(wl)} | 보유제외 {sorted(EXCLUDE-set(STABLE))}")
-    try: notify.send(f"🩸 캐스케이드-반등 시작 [{mode}] — 대형투매 줍기, 짧은손절+트레일. walk-forward 첫 통과(#40, t2.44), 모의 실측")
+    try: notify.send(f"🩸 캐스케이드-반등 시작 [{mode}] — 대형투매 줍기, 짧은손절+트레일. (백테 t2.44 — forward 게이트는 별개, 30건 후 판정)")
     except Exception: pass
     while True:
         try:
