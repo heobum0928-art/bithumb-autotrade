@@ -52,7 +52,7 @@ ts_to_idx = {} # coin -> {ts: idx}
 for coin, (path, _) in latest.items():
     try: d = json.load(open(path, encoding="utf-8"))
     except: continue
-    ts = [x["timestamp"] for x in d]
+    ts = [x["candle_date_time_utc"] for x in d]   # 캔들 경계값(코인 간 동일 격자) — timestamp(체결ms)는 불일치
     cl = [x["trade_price"] for x in d]
     op = [x["opening_price"] for x in d]
     data[coin] = (ts, cl, op)
