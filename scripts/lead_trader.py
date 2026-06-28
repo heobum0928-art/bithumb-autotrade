@@ -48,7 +48,7 @@ TRAIL = 1.0             # 고점 +1% 넘으면 고점-1% 트레일
 TIMEOUT_SEC = 900       # 15분 타임아웃 (T+5분 베스트라 짧게)
 SLOTS = 5
 ENTRY_KRW = 200_000
-CYCLE = 60
+CYCLE = 10              # 2026-06-28: 60→10초. 60초판 실측 -1.48%/t-2.66(백테+와 반전) = 폴링지연으로 빗썸 이미 따라온 고점진입. 속도가 생명 → 10초로 지연단축 재시도
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS","KRW"}
 POS = ROOT / "data" / "leadlag_pos.json"
 TRADES = ROOT / "data" / "leadlag_trades.csv"
