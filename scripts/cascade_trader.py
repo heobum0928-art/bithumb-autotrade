@@ -131,7 +131,9 @@ def main():
             for coin in list(pos.keys()):
                 p = pos[coin]; cur = price(c, coin)
                 if cur <= 0: continue
-                p["highest"] = max(p.get("highest", cur), cur)
+                prev_high = p.get("highest", cur)
+                p["highest"] = max(prev_high, cur)
+                if p["highest"] > prev_high: save_pos(pos)
                 pnl = (cur / p["entry"] - 1) * 100
                 hp = (p["highest"] / p["entry"] - 1) * 100      # 고점수익 %
                 sl_hit = pnl <= -SL
@@ -179,6 +181,11 @@ def main():
                     if live:
                         g = LiveGuard("cascade"); res = g.execute_buy(c, f"KRW-{coin}", entry_krw)
                         if res.get("dry"): log.info(f"진입 차단 {coin}: {res.get('reason')}"); continue
+                        if res.get("error"):
+                            log.error(f"[실전] 매수 실패 {coin}: {res.get('error')} — 포지션 미생성")
+                            try: notify.send(f"🚨 캐스케이드 매수 실패 {coin} {res.get('error')}")
+                            except Exception: pass
+                            continue
                         vol = entry_krw*(1-0.0004)/cur
                     else:
                         vol = entry_krw/cur
