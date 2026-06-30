@@ -195,6 +195,8 @@ def main():
                     local_high = max(cl[-(K+1):])
                     drop = (cl[-1] / local_high - 1) * 100
                     if drop > DROP or drop < DROP_MAX: continue  # 드롭 범위 필터 (3.5~5.5%)
+                    ma20 = sum(cl[-20:]) / 20
+                    if cl[-1] <= ma20: continue                  # 추세 하락 코인 제외 (MA20 하방 = 반등전략 구조적 불리)
                     avgv = sum(vl[-21:-1]) / 20 if len(vl) >= 21 else 0
                     vr = vl[-1] / avgv if avgv > 0 else 0
                     if vr < VOL_MULT or vr > VOL_MULT_MAX: continue  # 거래량 범위 필터 (2.5~5.5x)
