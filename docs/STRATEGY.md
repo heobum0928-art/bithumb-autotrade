@@ -222,6 +222,14 @@ PULLBACK_ENABLED = False  # 눌림목 추격 중단
 | TP_HALF | +3% | +6% → +2% → +3% | +6% 기다리다 되돌림, +2%는 너무 빨리 청산 |
 | TRAIL_PCT | 2% | 고정 | 트레일 구간 |
 | HOLD_MIN_SEC | 600초 | 신설 | 펌프덤프 방어용 최소 보유 |
+| **volaccum_trader** TP_PCT | 3.0% | 5.0→3.0 | 8일 로그 2779건 재분석: avg_gain 최고 0.73%(MANTA), 5% TP 현실 불가 |
+| **volaccum_trader** SL_PCT | 1.5% | 2.0→1.5 | avg_loss도 작음(최대 -1.52%), SL 좁혀 손실 제한 |
+| **volaccum_trader** VOL_MULT_MIN | 20배 | 유지 | 20~50배 구간이 avg+0.15%(최선 구간) |
+| **volaccum_trader** VOL_MULT_MAX | 80배 | 신규(없음→80) | 100배+ 코인 avg-0.27%, 상한 추가 |
+| **volaccum_trader** BUY_RATIO_MIN | 0.10 | 0.57→0.10 | 재분석: 매수비 낮을수록 avg_gain 좋음(<0.3이 +0.04%, >=0.7이 -0.38%) |
+| **volaccum_trader** BUY_RATIO_MAX | 0.45 | 신규(없음→0.45) | 0.45 초과 시 avg 음수 확인, 상한 추가 |
+| **volaccum_trader** DEPTH_MIN | -1.0 | 0.0→-1.0 | 깊이 음수 구간이 오히려 avg-0.08%(>0 대비 좋음), 사실상 필터 해제 |
+| **volaccum_trader** BLACKLIST | 17종 | 4종→17종 | 재분석 음수 코인 추가(HOOK/STRAX/VERONA/BLUE/POWR/SYRUP/TT/BTR 등) |
 | PRE_ENABLED | OFF | ON → OFF | 22건 14% 승률, -23,783원 누적 손실 |
 | OB_BID_RATIO | 0.0(비활성) | **1.5 → 0.0** | **[핵심 버그 수정 2026-05-25]** 펌핑 시 구조적으로 bid<ask → 1.5 기준이 모든 신호를 차단 |
 | RSI 범위 | **45~75** | 45~75 → 45~90 → **45~75** | 10팀 분석: RSI 90+ win5m=21%, 급락율79%. 75로 하향 |
