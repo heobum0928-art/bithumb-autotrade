@@ -147,7 +147,14 @@ def main():
                                     b = float(a.get("balance", 0) or 0)
                                     if b > 0: sell_vol = min(p["vol"], b)
                         except Exception: pass
-                        g = LiveGuard("cascade"); g.execute_sell(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol); g.record_realized((cur-p["entry"])*sell_vol)
+                        g = LiveGuard("cascade")
+                        res = g.execute_sell(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol)
+                        if res.get("error"):
+                            log.error(f"[실전] 매도 실패 {coin}: {res.get('error')} — 포지션 유지")
+                            try: notify.send(f"🚨 캐스케이드 매도 실패 {coin} [{reason}] {res.get('error')} — 포지션 유지")
+                            except Exception: pass
+                            continue
+                        g.record_realized((cur - p["entry"]) * sell_vol)
                     log.warning(f"[{mode}] 청산 {coin} @{cur:,.4f} PnL={pnl:+.2f}% | {reason}")
                     try: notify.send(f"🩸 캐스케이드 청산 {coin} {pnl:+.1f}% [{reason}] ({mode})")
                     except Exception: pass
