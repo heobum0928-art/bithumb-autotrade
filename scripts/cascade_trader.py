@@ -46,6 +46,8 @@ log = logging.getLogger(__name__)
 K = 5                # 낙폭 측정 윈도우 (25분)
 DROP = -3.5          # 고점대비 드롭 임계 % (2026-06-27: 슬리피지 흡수 스윗스팟, SL-2% 가정 t2.41)
 VOL_MULT = 2.5       # 진입봉 거래대금 / 20봉평균 (2026-06-27: 슬리피지 후 t2.41 유지 최소조건)
+VOL_MULT_MAX = 5.5   # 거래량 상한 (2026-06-30: forward 3~5x 100%WIN, 5x+ LOSS)
+DROP_MAX = -5.5      # 드롭 상한 (2026-06-30: 6%+ 드롭은 20%WIN, "떨어지는 칼")
 # ── 출구 파라미터 (백테스트 검증값 — 엣지의 핵심) ──
 SL = 1.5             # 진입가 -1.5% 손절
 TRAIL = 1.5          # 고점수익 -1.5%pt 트레일(고점이 +TRAIL% 넘으면 작동)
@@ -53,8 +55,11 @@ TIMEOUT_H = 2        # 2시간 타임아웃
 SLOTS = 5
 TOPN = 150            # 2026-06-27: 60→150, 거래대금3억+ 종목 전체(144개) 커버 — 표본축적 가속(엣지 무관, 유동성하한 유지)
 LIQ_FLOOR = 300_000_000
-COOLDOWN_MIN = 60
+COOLDOWN_LOSS_H = 24  # 손절 청산 후 동일 코인 24h 재진입 금지 (2026-06-30: OXT 4연속 -4.87% 방지)
+COOLDOWN_WIN_H = 1    # 트레일/타임아웃 청산 후 1h
+COOLDOWN_MIN = 60     # (하위호환 — 신규 로직으로 대체됨)
 ENTRY_KRW_DRY = 200_000
+COOLDOWN_FILE = ROOT / "data" / "cascade_cooldown.json"
 CYCLE = 60           # 1분마다
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS","KRW"}
 POS = ROOT / "data" / "cascade_pos.json"
@@ -62,6 +67,22 @@ POS = ROOT / "data" / "cascade_pos.json"
 
 def is_live():
     ls = live_status(); return bool(ls.get("enabled")) and "cascade" in ls.get("armed", [])
+
+
+def load_cooldown() -> dict:
+    try:
+        if COOLDOWN_FILE.exists():
+            raw = json.loads(COOLDOWN_FILE.read_text(encoding="utf-8"))
+            now = time.time()
+            return {k: v for k, v in raw.items() if v > now}  # 만료된 항목 제거
+    except Exception: pass
+    return {}
+
+
+def save_cooldown(cd: dict):
+    tmp = COOLDOWN_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cd, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, COOLDOWN_FILE)
 
 
 def load_pos():
@@ -105,7 +126,7 @@ def price(c, coin):
 
 
 def main():
-    c = BithumbClient(); pos = load_pos(); cooldown = {}
+    c = BithumbClient(); pos = load_pos(); cooldown = load_cooldown()
     EXCLUDE = set(STABLE)
     try:
         for a in c.get_accounts():
@@ -160,7 +181,9 @@ def main():
                     log.warning(f"[{mode}] 청산 {coin} @{cur:,.4f} PnL={pnl:+.2f}% | {reason}")
                     try: notify.send(f"🩸 캐스케이드 청산 {coin} {pnl:+.1f}% [{reason}] ({mode})")
                     except Exception: pass
-                    cooldown[coin] = time.time() + COOLDOWN_MIN*60
+                    cd_h = COOLDOWN_LOSS_H if sl_hit else COOLDOWN_WIN_H
+                    cooldown[coin] = time.time() + cd_h * 3600
+                    save_cooldown(cooldown)
                     del pos[coin]; save_pos(pos)
             # ── 진입 스캔 ──
             if len(pos) < SLOTS:
@@ -171,10 +194,10 @@ def main():
                     if not cl or len(cl) < 26: continue
                     local_high = max(cl[-(K+1):])
                     drop = (cl[-1] / local_high - 1) * 100
-                    if drop > DROP: continue                     # 드롭 부족
+                    if drop > DROP or drop < DROP_MAX: continue  # 드롭 범위 필터 (3.5~5.5%)
                     avgv = sum(vl[-21:-1]) / 20 if len(vl) >= 21 else 0
                     vr = vl[-1] / avgv if avgv > 0 else 0
-                    if vr < VOL_MULT: continue                   # 거래량 부족
+                    if vr < VOL_MULT or vr > VOL_MULT_MAX: continue  # 거래량 범위 필터 (2.5~5.5x)
                     if cl[-1] <= op[-1]: continue                # 반등캔들 아님(종가>시가 필요)
                     cur = cl[-1]
                     if cur <= 0: continue
