@@ -47,11 +47,12 @@ BOTS = {
     "crossex_logger":        ROOT / "scripts" / "crossex_logger.py",   # 교차거래소 선행신호 로거 (순수로깅·매매0, 격리)
     "volume_radar":          ROOT / "scripts" / "volume_radar.py",     # 거래대금 급증 레이더 (순수로깅·매매0, 격리)
     "accum_trader":          ROOT / "scripts" / "accum_trader.py",     # 매집 단타 (live_guard 제어, 약세장 역추세 실전)
-    "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·궤적캡처 (순수로깅, 첫펌프 데이터)
+    "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·자동진입 (실전, 10만원, 손절-5%·트레일+20%→-10%·30분)
     "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
     "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
     "futures_logger":        ROOT / "scripts" / "futures_logger.py",   # Binance 선물 펀딩/OI/롱숏 폴링 (순수로깅·매매0, cascade 하이브리드 외부신호 #1, 청산WS 한국차단→REST대체)
     "lead_ws_trader":        ROOT / "scripts" / "lead_ws_trader.py",   # 교차거래소 리드-래그 WS실시간 모의 (#41, 10초판+0.17%→WS속도극대화, 실주문0)
+    "momentum_trader":       ROOT / "scripts" / "momentum_trader.py",  # 모멘텀 홀딩 (#42, 강세장 트렌드팔로잉 24H+5~30% 72H보유, 모의)
 }
 
 
