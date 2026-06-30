@@ -54,7 +54,7 @@ FAPI = "https://fapi.binance.com"
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS","KRW"}
 CSV_PATH = ROOT / "data" / "futures_signals.csv"
 STATE = ROOT / "data" / "futures_state.json"
-TOPN = 40               # 빗썸 거래대금 상위 N개만 (∩ Binance선물)
+TOPN = 150              # 빗썸 거래대금 상위 N개만 (∩ Binance선물) — cascade 감시범위(150)와 정렬 (2026-07-01)
 CYCLE_SEC = 300         # 5분 폴링 (OI 5m 봉에 맞춤)
 OI_DUMP_PCT = -3.0      # OI 5분 변화 이 이하면 "청산 의심" 로그 알림
 
