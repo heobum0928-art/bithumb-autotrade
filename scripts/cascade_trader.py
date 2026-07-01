@@ -153,13 +153,14 @@ def main():
     except Exception: pass
     mode = "🔴실전" if is_live() else "모의"
     wl = watchlist(c); wl_day = datetime.now(KST).date()
-    log.info(f"캐스케이드-반등 시작 [{mode}] — 드롭{DROP}%+거래량{VOL_MULT}배 진입 / 손절-{SL}% 트레일{TRAIL}% | 감시{len(wl)} | 보유제외 {sorted(EXCLUDE-set(STABLE))}")
+    warned = c.get_warned_coins()
+    log.info(f"캐스케이드-반등 시작 [{mode}] — 드롭{DROP}%+거래량{VOL_MULT}배 진입 / 손절-{SL}% 트레일{TRAIL}% | 감시{len(wl)} | 유의종목제외{len(warned)} | 보유제외 {sorted(EXCLUDE-set(STABLE))}")
     try: notify.send(f"🩸 캐스케이드-반등 시작 [{mode}] — 대형투매 줍기, 짧은손절+트레일. (백테 t2.44 — forward 게이트는 별개, 30건 후 판정)")
     except Exception: pass
     while True:
         try:
             if datetime.now(KST).date() != wl_day:
-                wl_day = datetime.now(KST).date(); wl = watchlist(c)
+                wl_day = datetime.now(KST).date(); wl = watchlist(c); warned = c.get_warned_coins()
             live = is_live()
             cap = load_config().get("engine_caps_krw", {}).get("cascade", 0)
             entry_krw = (cap / SLOTS) if (live and cap) else ENTRY_KRW_DRY
@@ -204,7 +205,7 @@ def main():
             if len(pos) < SLOTS:
                 for coin in wl:
                     if len(pos) >= SLOTS: break
-                    if coin in pos or coin in EXCLUDE or cooldown.get(coin, 0) > time.time(): continue
+                    if coin in pos or coin in EXCLUDE or coin in warned or cooldown.get(coin, 0) > time.time(): continue
                     cl, op, vl = candles_5m(c, coin)
                     if not cl or len(cl) < 26: continue
                     local_high = max(cl[-(K+1):])

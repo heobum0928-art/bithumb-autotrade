@@ -168,11 +168,20 @@ class BithumbClient:
     # Public API — market info (API 2.0)
     # ------------------------------------------------------------------
 
-    def get_markets(self) -> list[dict]:
-        """Return all KRW markets. Each item has 'market', 'korean_name', 'english_name'."""
-        resp = self._session.get(f"{BASE_URL}/v1/market/all", params={"isDetails": "false"})
+    def get_markets(self, details: bool = False) -> list[dict]:
+        """Return all KRW markets. Each item has 'market', 'korean_name', 'english_name'.
+        details=True adds 'market_warning' ('NONE' or 'CAUTION' — 유의종목)."""
+        resp = self._session.get(f"{BASE_URL}/v1/market/all", params={"isDetails": str(details).lower()})
         resp.raise_for_status()
         return resp.json()
+
+    def get_warned_coins(self) -> set[str]:
+        """Return coin symbols currently flagged market_warning='CAUTION' (유의종목)."""
+        try:
+            return {m["market"].split("-")[1] for m in self.get_markets(details=True)
+                    if m.get("market_warning") == "CAUTION"}
+        except Exception:
+            return set()
 
     def get_all_coins_v2(self) -> set[str]:
         """Return coin symbols from API 2.0 market list (e.g. {'BTC', 'ETH', ...})."""
