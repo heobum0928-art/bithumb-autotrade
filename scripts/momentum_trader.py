@@ -7,7 +7,8 @@
 
 진입조건: 거래대금 30억+ ∩ 24H +5~30% ∩ 1H 상승 중 ∩ BTC -2% 이상
 청산: 손절-7% / 트레일(고점+15%→고점-10%) / 72H 타임아웃
-★ 순수 모의: 실주문 0. 포트 47236.
+실거래 여부는 live_guard(engine='momentum')가 결정 — armed_engines에 없으면 항상 모의(2026-07-01).
+사전등록 게이트 통과 전까지 절대 arm 금지. 포트 47236.
 상태 data/momentum_pos.json | 거래기록 data/momentum_trades.csv
 Run: python scripts/momentum_trader.py
 """
@@ -37,6 +38,7 @@ _single()
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from bithumb.client import BithumbClient
+from bithumb.live_guard import LiveGuard, live_status, load_config
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(
@@ -50,7 +52,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── 파라미터 ──
-LIVE = False           # 모의 검증 없이 실전 → 모의로 전환 (2026-06-30)
+# 실거래 여부는 live_guard(engine='momentum')가 결정 — armed_engines에 없으면 항상 모의(2026-07-01)
 CHG_MIN = 5.0          # 24H 최소 상승률 %
 CHG_MAX = 30.0         # 24H 최대 상승률 (막차 제외)
 LIQ_FLOOR = 3_000_000_000  # 거래대금 30억+
@@ -59,8 +61,12 @@ TRAIL_TRIGGER = 15.0   # 트레일 시작 기준 (고점+15% 달성 시)
 TRAIL = 10.0           # 고점 대비 트레일 %
 TIMEOUT_H = 72         # 최대 보유 시간
 SLOTS = 3
-ENTRY_KRW = 50_000     # 슬롯당 5만원 (실전 소액)
+ENTRY_KRW_DRY = 50_000 # 모의 기본 슬롯당 금액
 CYCLE = 300            # 5분 폴링
+
+
+def is_live():
+    ls = live_status(); return bool(ls.get("enabled")) and "momentum" in ls.get("armed", [])
 BTC_SL = -2.0          # BTC 이 이상 하락 중이면 신규 진입 안함
 COOLDOWN_H = 24        # 청산 후 재진입 쿨다운
 STABLE = {"USDT","USDC","DAI","TUSD","BUSD","FDUSD","PYUSD","USDS","KRW"}
@@ -129,17 +135,18 @@ def main():
     c = BithumbClient()
     pos  = load_json(POS, {})
     cool = load_json(COOLDOWN_F, {})
+    mode = "🔴실전" if is_live() else "모의"
 
     log.info(
-        f"모멘텀 홀딩 모의 시작 — 24H+{CHG_MIN}~{CHG_MAX}% 거래대금{LIQ_FLOOR/1e8:.0f}억+ | "
+        f"모멘텀 홀딩 시작 [{mode}] — 24H+{CHG_MIN}~{CHG_MAX}% 거래대금{LIQ_FLOOR/1e8:.0f}억+ | "
         f"손절-{SL}% 트레일(고점+{TRAIL_TRIGGER}%→-{TRAIL}%) 타임{TIMEOUT_H}H | "
-        f"슬롯{SLOTS}×{ENTRY_KRW//10000}만 | 모의·실주문0"
+        f"슬롯{SLOTS}×{ENTRY_KRW_DRY//10000}만"
     )
     try:
         from bithumb import notify
         notify.send(
-            f"📈 모멘텀 홀딩 모의 시작 (#42) — 강세장 트렌드팔로잉. "
-            f"24H+{CHG_MIN}~{CHG_MAX}%, 손절-{SL}%, 트레일-{TRAIL}%, 72H보유. 실주문0"
+            f"📈 모멘텀 홀딩 시작 (#42) [{mode}] — 강세장 트렌드팔로잉. "
+            f"24H+{CHG_MIN}~{CHG_MAX}%, 손절-{SL}%, 트레일-{TRAIL}%, 72H보유. 실전은 live_guard 게이트 통과시만"
         )
     except Exception: pass
 
@@ -179,16 +186,18 @@ def main():
                         f"트레일(고점+{hp:.1f}%→현재{pnl:+.1f}%)" if trail_hit else
                         f"타임아웃{TIMEOUT_H}H"
                     )
-                    sell_ok = True
                     if p.get("live") and p.get("volume", 0) > 0:
-                        try:
-                            c.market_sell(f"KRW-{coin}", p["volume"])
-                            log.info(f"[실전] 매도 완료 {coin} {p['volume']:.6f}개")
-                        except Exception as e:
-                            log.error(f"[실전] 매도 실패 {coin}: {e} — 포지션 유지")
-                            sell_ok = False
-                    if not sell_ok:
-                        continue
+                        g = LiveGuard("momentum")
+                        res = g.execute_sell(c, f"KRW-{coin}", p["volume"], krw_hint=cur*p["volume"])
+                        if res.get("error"):
+                            log.error(f"[실전] 매도 실패 {coin}: {res.get('error')} — 포지션 유지")
+                            try:
+                                from bithumb import notify
+                                notify.send(f"🚨 모멘텀 매도 실패 {coin} [{reason}] {res.get('error')} — 포지션 유지")
+                            except Exception: pass
+                            continue
+                        g.record_realized((cur - p["entry"]) * p["volume"])
+                        log.info(f"[실전] 매도 완료 {coin} {p['volume']:.6f}개")
                     tag = "[실전]" if p.get("live") else "[모의]"
                     log.info(f"{tag} 청산 {coin} @{cur:,.4f} PnL={pnl:+.2f}% | {reason} ({held_h:.1f}H보유)")
                     log_trade([
@@ -229,24 +238,32 @@ def main():
                     if h1_p is not None and price <= h1_p:
                         continue  # 1H 동안 횡보/하락 → 패스
 
+                    live = is_live()
+                    cap = load_config().get("engine_caps_krw", {}).get("momentum", 0)
+                    entry_krw = (cap / SLOTS) if (live and cap) else ENTRY_KRW_DRY
                     volume = 0.0
-                    if LIVE:
-                        try:
-                            c.market_buy(f"KRW-{coin}", ENTRY_KRW)
-                            volume = round(ENTRY_KRW / price * 0.9975, 8)
-                            log.info(f"[실전] 매수 완료 {coin} ~{volume:.6f}개")
-                        except Exception as e:
-                            log.error(f"[실전] 매수 실패 {coin}: {e}"); continue
+                    if live:
+                        g = LiveGuard("momentum"); res = g.execute_buy(c, f"KRW-{coin}", entry_krw)
+                        if res.get("dry"): log.info(f"진입 차단 {coin}: {res.get('reason')}"); continue
+                        if res.get("error"):
+                            log.error(f"[실전] 매수 실패 {coin}: {res.get('error')} — 포지션 미생성")
+                            try:
+                                from bithumb import notify
+                                notify.send(f"🚨 모멘텀 매수 실패 {coin} {res.get('error')}")
+                            except Exception: pass
+                            continue
+                        volume = round(entry_krw / price * 0.9975, 8)
+                        log.info(f"[실전] 매수 완료 {coin} ~{volume:.6f}개")
 
                     pos[coin] = {
                         "entry": price, "highest": price,
                         "chg24": chg24, "volume": volume,
                         "entered_ts": now,
                         "entered": now_kst.isoformat(),
-                        "live": LIVE
+                        "live": live
                     }
                     save_json(POS, pos)
-                    tag = "[실전]" if LIVE else "[모의]"
+                    tag = "[실전]" if live else "[모의]"
                     log.info(
                         f"{tag} 진입 {coin} @{price:,.4f} — "
                         f"24H{chg24:+.1f}% 거래대금{d['vol']/1e8:.0f}억 (BTC{btc_chg:+.1f}%)"
