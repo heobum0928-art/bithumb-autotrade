@@ -209,19 +209,23 @@ def main():
                     if coin in pos or coin in EXCLUDE or coin in warned or cooldown.get(coin, 0) > time.time(): continue
                     if coin in premium_spiked_coins(): continue  # 신선 김프 스파이크 = 붕괴 예고 (리서치3차: +3h 음수율 100%)
                     cl, op, vl = candles_5m(c, coin)
-                    if not cl or len(cl) < 26: continue
-                    local_high = max(cl[-(K+1):])
-                    drop = (cl[-1] / local_high - 1) * 100
+                    if not cl or len(cl) < 27: continue
+                    # ★ 신호 판정은 '마지막 완성봉' 기준 (2026-07-02) — 백테스트(t2.44)와 동일 조건.
+                    #   기존엔 진행 중 봉으로 판정해 백테와 분포가 달랐음(거래량 미완성·순간조건 진입).
+                    cs, osig, vs = cl[:-1], op[:-1], vl[:-1]
+                    local_high = max(cs[-(K+1):])
+                    drop = (cs[-1] / local_high - 1) * 100
                     if drop > DROP or drop < DROP_MAX: continue  # 드롭 범위 필터 (3.5~5.5%)
-                    ma20 = sum(cl[-20:]) / 20
-                    if cl[-1] <= ma20: continue                  # 추세 하락 코인 제외 (MA20 하방 = 반등전략 구조적 불리)
-                    avgv = sum(vl[-21:-1]) / 20 if len(vl) >= 21 else 0
-                    vr = vl[-1] / avgv if avgv > 0 else 0
+                    ma20 = sum(cs[-20:]) / 20
+                    if cs[-1] <= ma20: continue                  # 추세 하락 코인 제외 (MA20 하방 = 반등전략 구조적 불리)
+                    avgv = sum(vs[-21:-1]) / 20 if len(vs) >= 21 else 0
+                    vr = vs[-1] / avgv if avgv > 0 else 0
                     if vr < VOL_MULT or vr > VOL_MULT_MAX: continue  # 거래량 범위 필터 (2.5~5.5x)
-                    if cl[-1] <= op[-1]: continue                # 반등캔들 아님(종가>시가 필요)
-                    rsi = rsi_from_closes(cl)                    # 진입필터로 미사용(2026-07-01 백테스트: RSI<=45 90일간 신호0건) — 기록만
-                    cur = cl[-1]
+                    if cs[-1] <= osig[-1]: continue              # 반등캔들 아님(종가>시가 필요)
+                    rsi = rsi_from_closes(cs)                    # 진입필터로 미사용(2026-07-01 백테스트: RSI<=45 90일간 신호0건) — 기록만
+                    cur = price(c, coin) or cl[-1]               # 진입가 = 현재가
                     if cur <= 0: continue
+                    if (cur / cs[-1] - 1) * 100 > 1.0: continue  # 봉마감 후 이미 +1% 이상 튀었으면 늦음 — 추격 방지
                     if live:
                         g = LiveGuard("cascade"); res = g.execute_buy(c, f"KRW-{coin}", entry_krw)
                         if res.get("dry"): log.info(f"진입 차단 {coin}: {res.get('reason')}"); continue
