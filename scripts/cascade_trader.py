@@ -47,8 +47,9 @@ log = logging.getLogger(__name__)
 K = 5                # 낙폭 측정 윈도우 (25분)
 DROP = -3.5          # 고점대비 드롭 임계 % (2026-06-27: 슬리피지 흡수 스윗스팟, SL-2% 가정 t2.41)
 VOL_MULT = 2.5       # 진입봉 거래대금 / 20봉평균 (2026-06-27: 슬리피지 후 t2.41 유지 최소조건)
-VOL_MULT_MAX = 5.5   # 거래량 상한 (2026-06-30: forward 3~5x 100%WIN, 5x+ LOSS)
-DROP_MAX = -5.5      # 드롭 상한 (2026-06-30: 6%+ 드롭은 20%WIN, "떨어지는 칼")
+DROP_MAX = -5.5      # 드롭 상한 (2026-07-02 절제백테: 유지 시 t3.62→3.77 개선 — 유일하게 검증된 추가필터)
+# 거래량상한(5.5)·MA20 필터 제거 (2026-07-02 절제백테): 거래량상한 t2.59로 악화,
+# MA20은 t-0.59로 엣지 파괴(90일 신호 444→72건, 남은 것도 음수). forward 22건 소표본 과적합이었음.
 RSI_PERIOD = 14      # RSI는 진입필터 미사용(2026-07-01 백테스트: RSI<=45 90일간 신호0건) — 기록만
 # ── 출구 파라미터 (백테스트 검증값 — 엣지의 핵심) ──
 SL = 1.5             # 진입가 -1.5% 손절
@@ -215,12 +216,10 @@ def main():
                     cs, osig, vs = cl[:-1], op[:-1], vl[:-1]
                     local_high = max(cs[-(K+1):])
                     drop = (cs[-1] / local_high - 1) * 100
-                    if drop > DROP or drop < DROP_MAX: continue  # 드롭 범위 필터 (3.5~5.5%)
-                    ma20 = sum(cs[-20:]) / 20
-                    if cs[-1] <= ma20: continue                  # 추세 하락 코인 제외 (MA20 하방 = 반등전략 구조적 불리)
+                    if drop > DROP or drop < DROP_MAX: continue  # 드롭 범위 필터 (3.5~5.5%, 절제백테 t3.77)
                     avgv = sum(vs[-21:-1]) / 20 if len(vs) >= 21 else 0
                     vr = vs[-1] / avgv if avgv > 0 else 0
-                    if vr < VOL_MULT or vr > VOL_MULT_MAX: continue  # 거래량 범위 필터 (2.5~5.5x)
+                    if vr < VOL_MULT: continue                   # 거래량 하한 (상한·MA20은 절제백테로 제거)
                     if cs[-1] <= osig[-1]: continue              # 반등캔들 아님(종가>시가 필요)
                     rsi = rsi_from_closes(cs)                    # 진입필터로 미사용(2026-07-01 백테스트: RSI<=45 90일간 신호0건) — 기록만
                     cur = price(c, coin) or cl[-1]               # 진입가 = 현재가
