@@ -160,7 +160,14 @@ def main():
                                     b = float(a.get("balance", 0) or 0)
                                     if b > 0: sell_vol = min(p["vol"], b)
                         except Exception: pass
-                        g = LiveGuard("rsi"); g.execute_sell(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol); g.record_realized((cur-p["entry"])*sell_vol)
+                        g = LiveGuard("rsi")
+                        res = g.execute_sell(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol)
+                        if res.get("error"):
+                            log.error(f"[실전] 매도 실패 {coin}: {res.get('error')} — 포지션 유지")
+                            try: notify.send(f"🚨 RSI반등 매도 실패 {coin} [{reason}] — 포지션 유지")
+                            except Exception: pass
+                            continue
+                        g.record_realized((cur-p["entry"])*sell_vol)
                     log.warning(f"[{mode}] 청산 {coin} @{cur:,.4f} PnL={pnl*100:+.2f}% | {reason}(RSI{r:.0f})")
                     try: notify.send(f"📉 RSI반등 청산 {coin} {pnl*100:+.1f}% [{reason}] ({mode})")
                     except Exception: pass
@@ -172,15 +179,18 @@ def main():
                     if len(pos) >= SLOTS: break
                     if coin in pos or coin in EXCLUDE or cooldown.get(coin, 0) > time.time(): continue
                     cl, vl = candles_5m(c, coin)
-                    if not cl or not vl: continue
-                    r = rsi(cl)
+                    if not cl or not vl or len(cl) < 23: continue
+                    # ★ 신호 판정은 '마지막 완성봉' 기준 (2026-07-02) — 백테스트(t2.38)와 동일 조건
+                    cs, vs = cl[:-1], vl[:-1]
+                    r = rsi(cs)
                     if r is None or r >= RSI_ENTRY: continue
                     # ★ 투매 필터 — 진입봉 거래대금이 20봉평균×VOL_MULT 이상일 때만(조용한 칼 거름)
-                    avgv = sum(vl[-21:-1]) / 20 if len(vl) >= 21 else 0
-                    vr = vl[-1] / avgv if avgv > 0 else 0
+                    avgv = sum(vs[-21:-1]) / 20 if len(vs) >= 21 else 0
+                    vr = vs[-1] / avgv if avgv > 0 else 0
                     if vr < VOL_MULT: continue
-                    cur = cl[-1]
+                    cur = price(c, coin) or cl[-1]
                     if cur <= 0: continue
+                    if (cur / cs[-1] - 1) * 100 > 1.0: continue  # 봉마감 후 +1% 이상 튀었으면 추격 방지
                     if live:
                         g = LiveGuard("rsi"); res = g.execute_buy(c, f"KRW-{coin}", entry_krw)
                         if res.get("dry"): log.info(f"진입 차단 {coin}: {res.get('reason')}"); continue
