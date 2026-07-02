@@ -39,6 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from bithumb.client import BithumbClient
 from bithumb.live_guard import LiveGuard, live_status, load_config
+from bithumb.premium_guard import premium_spiked_coins
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(
@@ -232,6 +233,8 @@ def main():
 
                 for coin, d in candidates:
                     if len(pos) >= SLOTS: break
+                    if coin in premium_spiked_coins():
+                        continue  # 신선 김프 스파이크 = 붕괴 예고 (리서치3차: +3h 음수율 100%)
                     price  = d["price"]
                     chg24  = d["chg24"]
                     h1_p   = hour_ago_price(coin)

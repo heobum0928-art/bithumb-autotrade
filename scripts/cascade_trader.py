@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 from bithumb.client import BithumbClient
 from bithumb import notify
 from bithumb.live_guard import LiveGuard, live_status, load_config
+from bithumb.premium_guard import premium_spiked_coins
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [CASC] %(message)s",
@@ -206,6 +207,7 @@ def main():
                 for coin in wl:
                     if len(pos) >= SLOTS: break
                     if coin in pos or coin in EXCLUDE or coin in warned or cooldown.get(coin, 0) > time.time(): continue
+                    if coin in premium_spiked_coins(): continue  # 신선 김프 스파이크 = 붕괴 예고 (리서치3차: +3h 음수율 100%)
                     cl, op, vl = candles_5m(c, coin)
                     if not cl or len(cl) < 26: continue
                     local_high = max(cl[-(K+1):])
