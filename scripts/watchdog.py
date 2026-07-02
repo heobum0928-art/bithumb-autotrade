@@ -36,7 +36,7 @@ CHECK_INTERVAL = 30  # 초마다 프로세스 확인
 BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
     "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
-    "swing_monitor":         ROOT / "scripts" / "swing_monitor.py",    # 스윙 MA 알림
+    # "swing_monitor" 제거 (2026-06-30): 스윙 전략 없음, 불필요
     # "vb_trader" 제거 (2026-06-25): forward t=-4.29, 승률17% — 폐기 확정
     "retest_trader":         ROOT / "scripts" / "retest_trader.py",    # 돌파-재테스트 전략 B (모의 검증 중)
     "em_trader":             ROOT / "scripts" / "em_trader.py",        # #24 초기모멘텀 (약세장 전용·모의, forward 게이트 검증)
@@ -50,9 +50,11 @@ BOTS = {
     "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·자동진입 (실전, 10만원, 손절-5%·트레일+20%→-10%·30분)
     "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
     "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
-    "futures_logger":        ROOT / "scripts" / "futures_logger.py",   # Binance 선물 펀딩/OI/롱숏 폴링 (순수로깅·매매0, cascade 하이브리드 외부신호 #1, 청산WS 한국차단→REST대체)
-    "lead_ws_trader":        ROOT / "scripts" / "lead_ws_trader.py",   # 교차거래소 리드-래그 WS실시간 모의 (#41, 10초판+0.17%→WS속도극대화, 실주문0)
+    # "futures_logger" 제거 (2026-06-30): 선물 미사용, CPU 버그, 불필요
+    # "lead_ws_trader" 폐기 (2026-07-02): 716건 비용후 -0.252%/t-4.07 통계적 확정손실 (#41)
     "momentum_trader":       ROOT / "scripts" / "momentum_trader.py",  # 모멘텀 홀딩 (#42, 강세장 트렌드팔로잉 24H+5~30% 72H보유, 모의)
+    "volaccum_trader":       ROOT / "scripts" / "volaccum_trader.py",  # 거래량매집 단타 (#43, 20~80배 스파이크 모의, TP+3% SL-3% 2H)
+    # "spike_tracker" 제거 (2026-06-30): volume_radar와 역할 겹침, 불필요
 }
 
 
