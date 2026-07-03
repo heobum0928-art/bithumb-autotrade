@@ -52,7 +52,10 @@ TIMEOUT_MIN  = 30         # 30분 타임아웃
 POLL         = 10         # 폴링 10초
 TRACK_HOURS  = 6
 SNAP_SEC     = 60
-WAIT_FIRST_MAX = 90       # 첫 체결가 기다리는 최대 초
+WAIT_FIRST_MAX = 7200     # 첫 체결가 기다리는 최대 초 (2026-07-03: 90s→2h)
+                          # 실측(MPLX·NEX 2026-07-03): 마켓 등록≠거래시작. 등록 후 오랫동안
+                          # closing_price=0·호가창 "서비스 준비 아님"으로 아예 거래 미개시 상태였음.
+                          # 거래 시작 전엔 아무도 못 사므로 오래 기다려도 경쟁열위 없음 — 90s는 과도하게 짧았음.
 
 KNOWN    = ROOT / "data" / "known_coins.json"
 CSV_PATH = ROOT / "data" / "newlisting_events.csv"
@@ -125,8 +128,9 @@ def enter_position(c: BithumbClient, coin: str, price: float):
 
 
 def wait_and_enter(c: BithumbClient, coin: str):
-    """첫 체결가 기다린 후 진입."""
+    """첫 체결가 기다린 후 진입. 처음 2분은 빠르게(2s), 이후엔 느슨하게(10s) — 장기대기 API 절약."""
     deadline = time.time() + WAIT_FIRST_MAX
+    start = time.time()
     while time.time() < deadline:
         try:
             tk = c.get_ticker(coin)
@@ -135,7 +139,7 @@ def wait_and_enter(c: BithumbClient, coin: str):
                 enter_position(c, coin, price)
                 return
         except Exception: pass
-        time.sleep(2)
+        time.sleep(2 if time.time() - start < 120 else 10)
     log.warning(f"{coin} 첫 체결가 {WAIT_FIRST_MAX}초 내 못 잡음 — 진입 포기")
 
 
@@ -173,12 +177,16 @@ def check_exits(c: BithumbClient, tk_all: dict):
                   f"트레일(고점+{hp:.1f}%→현재{pnl:+.1f}%)" if trail_hit else
                   f"타임아웃{TIMEOUT_MIN}분")
 
+        sell_ok = True
         if LIVE and p.get("volume", 0) > 0:
             try:
                 c.market_sell(f"KRW-{coin}", p["volume"])
                 log.info(f"[실전] 매도 완료 {coin} {p['volume']:.6f}개")
             except Exception as e:
-                log.error(f"[실전] 매도 실패 {coin}: {e}")
+                log.error(f"[실전] 매도 실패 {coin}: {e} — 포지션 유지")
+                sell_ok = False
+        if not sell_ok:
+            continue
 
         tag = "[실전]" if p.get("live") else "[모의]"
         log.info(f"{tag} 청산 {coin} @{cur:,.2f} PnL={pnl:+.2f}% | {reason} ({held_min:.0f}분보유)")
