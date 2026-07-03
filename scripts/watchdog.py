@@ -52,7 +52,8 @@ BOTS = {
     "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
     # "futures_logger" 제거 (2026-06-30): 선물 미사용, CPU 버그, 불필요
     # "lead_ws_trader" 폐기 (2026-07-02): 716건 비용후 -0.252%/t-4.07 통계적 확정손실 (#41)
-    "momentum_trader":       ROOT / "scripts" / "momentum_trader.py",  # 모멘텀 홀딩 (#42, 강세장 트렌드팔로잉 24H+5~30% 72H보유, 모의)
+    # "momentum_trader" 폐기 (2026-07-03): 90일 절제백테 전 구간(15분~168H) 전부 음수(t-17.5~-1.3),
+    # 실측 15건도 -46.21%p 일치 확인. "오른 코인 추격"이 알트에서 전 타임프레임 역효과 (#42)
     "volaccum_trader":       ROOT / "scripts" / "volaccum_trader.py",  # 거래량매집 단타 (#43, 20~80배 스파이크 모의, TP+3% SL-3% 2H)
     # "spike_tracker" 제거 (2026-06-30): volume_radar와 역할 겹침, 불필요
 }
