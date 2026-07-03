@@ -29,12 +29,25 @@ def _is_quiet_hours() -> bool:
     return h >= qs or h < qe  # 자정 걸치는 경우
 
 
+# ── 알림 화이트리스트 (2026-07-03 사용자 요청: cascade 매수/매도/수익 외 전부 끔) ──
+# 통과: 캐스케이드 진입/청산/실패경보 + 시스템 치명 경보(🚨). 나머지 봇 시작/진입/청산 알림 전부 차단.
+ALLOW_PATTERNS = ["캐스케이드 진입", "캐스케이드 청산", "캐스케이드 매수 실패", "캐스케이드 매도 실패", "🚨"]
+
+
+def _allowed(text: str) -> bool:
+    return any(p in text for p in ALLOW_PATTERNS)
+
+
 def send(text: str, force: bool = False) -> bool:
-    """Send Telegram message. Skipped during quiet hours unless force=True."""
+    """Send Telegram message. Skipped during quiet hours unless force=True.
+    2026-07-03: 화이트리스트 미통과 메시지는 로그만 남기고 전송 생략."""
     cfg = _get_cfg().get("telegram", {})
     token = cfg.get("bot_token", "")
     chat_id = cfg.get("chat_id", "")
     if not token or not chat_id:
+        return False
+    if not _allowed(text):
+        log.debug(f"[Telegram] 화이트리스트 미통과 — 전송 생략: {text[:50]}")
         return False
     if not force and _is_quiet_hours():
         log.debug("[Telegram] 무음 시간대 — 전송 생략")
