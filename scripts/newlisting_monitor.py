@@ -1,16 +1,17 @@
 """
-신규상장 감지 + 자동 진입 (newlisting_monitor) — 빗썸 신규상장 첫 펌핑 실전.
+신규상장 감지 + 자동 진입 (newlisting_monitor) — 빗썸 신규상장 첫 펌핑 #44.
 
 근거(2026-06-30 에이전트 분석): 학술 연구 327건 기준 상장일 평균 +5.7%, 바이낸스 +41%.
-0.25% 수수료를 압도하는 유일한 구간. 백테 불필요 — 상장 이벤트 자체가 엣지.
+단 이 수치는 일반 시장 통계고, 빗썸+본 봇 규칙(손절-5%, 트레일+20%→-10%, 30분)으로
+실제 되는지는 미검증(2026-07-03 발견 — "백테 불필요"라 써놓고 실거래부터 나간 상태였음).
 
 동작:
   1. 빗썸 전체 ticker 10초 폴링 → 새 코인 출현 = 신규상장 감지
-  2. 첫 체결가 확인 후 즉시 시장가 매수 (ENTRY_KRW)
+  2. 첫 체결가 확인 후 즉시 시장가 매수 (실거래 여부는 live_guard(engine='newlisting') 결정)
   3. 손절-SL% / 고점+TRAIL_TRIGGER% → 고점-TRAIL_PCT% 트레일 / TIMEOUT_MIN분 타임아웃
   4. 가격궤적 CSV 기록 + 텔레그램 알림
 
-포트 47229. Run: python scripts/newlisting_monitor.py
+사전등록 게이트 통과 전까지 armed 금지. 포트 47229. Run: python scripts/newlisting_monitor.py
 """
 import sys, os, atexit, time, json, csv, socket, logging, threading
 from datetime import datetime, timezone, timedelta
@@ -35,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from bithumb.client import BithumbClient
 from bithumb import notify
+from bithumb.live_guard import LiveGuard, live_status, load_config
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [NEWLIST] %(message)s",
@@ -43,8 +45,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [NEWLIST] %(message)
 log = logging.getLogger(__name__)
 
 # ── 파라미터 ──
-LIVE         = True
-ENTRY_KRW    = 100_000    # 10만원 (신규상장 변동성 큼)
+# 실거래 여부는 live_guard(engine='newlisting')가 결정 — armed_engines에 없으면 항상 모의(2026-07-03)
+ENTRY_KRW_DRY = 100_000   # 모의 기본 (신규상장 변동성 큼)
 SL_PCT       = 5.0        # 손절 -5%
 TRAIL_TRIGGER= 20.0       # 트레일 시작 기준 고점 +20%
 TRAIL_PCT    = 10.0       # 고점 대비 트레일 %
@@ -101,26 +103,37 @@ def log_trade(coin, entry, exit_p, pnl, reason, held_min):
                     coin, f"{entry:.4f}", f"{exit_p:.4f}", f"{pnl:+.2f}", reason, f"{held_min:.0f}"])
 
 
+def is_live():
+    ls = live_status(); return bool(ls.get("enabled")) and "newlisting" in ls.get("armed", [])
+
+
 def enter_position(c: BithumbClient, coin: str, price: float):
     """신규상장 진입 (별도 스레드에서 호출)."""
+    live = is_live()
+    cap = load_config().get("engine_caps_krw", {}).get("newlisting", 0)
+    entry_krw = cap if (live and cap) else ENTRY_KRW_DRY
     volume = 0.0
-    if LIVE:
-        try:
-            c.market_buy(f"KRW-{coin}", ENTRY_KRW)
-            volume = round(ENTRY_KRW / price * 0.9975, 8)
-            log.info(f"[실전] 매수 완료 {coin} @{price:,.2f} ~{volume:.6f}개")
-        except Exception as e:
-            log.error(f"[실전] 매수 실패 {coin}: {e}"); return
+    if live:
+        g = LiveGuard("newlisting"); res = g.execute_buy(c, f"KRW-{coin}", entry_krw)
+        if res.get("dry"):
+            log.info(f"진입 차단 {coin}: {res.get('reason')}"); return
+        if res.get("error"):
+            log.error(f"[실전] 매수 실패 {coin}: {res.get('error')} — 포지션 미생성")
+            try: notify.send(f"🚨 신규상장 매수 실패 {coin} {res.get('error')}")
+            except Exception: pass
+            return
+        volume = round(entry_krw / price * 0.9975, 8)
+        log.info(f"[실전] 매수 완료 {coin} @{price:,.2f} ~{volume:.6f}개")
 
     with _pos_lock:
         _positions[coin] = {
             "entry": price, "highest": price, "volume": volume,
             "entered_ts": time.time(),
             "entered": datetime.now(KST).isoformat(),
-            "live": LIVE
+            "live": live
         }
     save_pos()
-    tag = "[실전]" if LIVE else "[모의]"
+    tag = "[실전]" if live else "[모의]"
     log.info(f"{tag} 신규상장 진입 {coin} @{price:,.2f}")
     try:
         notify.send(f"🆕 신규상장 진입 {coin} @{price:,.0f}원 {tag}\n손절-{SL_PCT}% / 트레일+{TRAIL_TRIGGER}%→-{TRAIL_PCT}% / {TIMEOUT_MIN}분")
@@ -177,16 +190,16 @@ def check_exits(c: BithumbClient, tk_all: dict):
                   f"트레일(고점+{hp:.1f}%→현재{pnl:+.1f}%)" if trail_hit else
                   f"타임아웃{TIMEOUT_MIN}분")
 
-        sell_ok = True
-        if LIVE and p.get("volume", 0) > 0:
-            try:
-                c.market_sell(f"KRW-{coin}", p["volume"])
-                log.info(f"[실전] 매도 완료 {coin} {p['volume']:.6f}개")
-            except Exception as e:
-                log.error(f"[실전] 매도 실패 {coin}: {e} — 포지션 유지")
-                sell_ok = False
-        if not sell_ok:
-            continue
+        if p.get("live") and p.get("volume", 0) > 0:
+            g = LiveGuard("newlisting")
+            res = g.execute_sell(c, f"KRW-{coin}", p["volume"], krw_hint=cur*p["volume"])
+            if res.get("error"):
+                log.error(f"[실전] 매도 실패 {coin}: {res.get('error')} — 포지션 유지")
+                try: notify.send(f"🚨 신규상장 매도 실패 {coin} [{reason}] — 포지션 유지")
+                except Exception: pass
+                continue
+            g.record_realized((cur - p["entry"]) * p["volume"])
+            log.info(f"[실전] 매도 완료 {coin} {p['volume']:.6f}개")
 
         tag = "[실전]" if p.get("live") else "[모의]"
         log.info(f"{tag} 청산 {coin} @{cur:,.2f} PnL={pnl:+.2f}% | {reason} ({held_min:.0f}분보유)")
@@ -213,9 +226,9 @@ def main():
     known |= cur; save_known(known)
     tracking = {}
     last_snap = {}
-    tag = "[실전]" if LIVE else "[모의]"
-    log.info(f"신규상장 감지+자동진입 {tag} — 등록 {len(known)}코인 | 진입{ENTRY_KRW//10000}만 손절-{SL_PCT}% 트레일+{TRAIL_TRIGGER}%→-{TRAIL_PCT}% {TIMEOUT_MIN}분")
-    try: notify.send(f"🆕 신규상장 자동진입 시작 {tag} — {len(known)}종 감시. 상장 감지 즉시 {ENTRY_KRW//10000}만원 매수.")
+    tag = "[실전]" if is_live() else "[모의]"
+    log.info(f"신규상장 감지+자동진입 {tag} — 등록 {len(known)}코인 | 진입{ENTRY_KRW_DRY//10000}만 손절-{SL_PCT}% 트레일+{TRAIL_TRIGGER}%→-{TRAIL_PCT}% {TIMEOUT_MIN}분")
+    try: notify.send(f"🆕 신규상장 자동진입 시작 {tag} — {len(known)}종 감시. 실전은 live_guard 게이트 통과시만.")
     except Exception: pass
 
     while True:
