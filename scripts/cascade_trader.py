@@ -189,7 +189,11 @@ def main():
                                     if b > 0: sell_vol = min(p["vol"], b)
                         except Exception: pass
                         g = LiveGuard("cascade")
-                        res = g.execute_sell(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol)
+                        # 손절은 소프트스탑(지정가→8s→시장가폴백, 슬리피지 상한) — 트레일/타임아웃은 시장가 (2026-07-03)
+                        if sl_hit:
+                            res = g.execute_sell_soft(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol)
+                        else:
+                            res = g.execute_sell(c, f"KRW-{coin}", sell_vol, krw_hint=cur*sell_vol)
                         if res.get("error"):
                             log.error(f"[실전] 매도 실패 {coin}: {res.get('error')} — 포지션 유지")
                             try: notify.send(f"🚨 캐스케이드 매도 실패 {coin} [{reason}] {res.get('error')} — 포지션 유지")

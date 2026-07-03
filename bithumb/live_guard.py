@@ -151,6 +151,66 @@ class LiveGuard:
         self._ledger("sell", market, 0, volume, res)
         return {"live": True, "result": res}
 
+    def execute_sell_soft(self, client, market: str, volume: float, krw_hint: float = 0.0,
+                          limit_slip_pct: float = 0.3, wait_sec: float = 8.0) -> dict:
+        """소프트 스탑 매도 — 슬리피지 상한 지정 (2026-07-03).
+
+        시장가로 바로 던지지 않고: ①현재 최우선 매수호가 대비 limit_slip_pct% 아래에
+        지정가 매도 → ②wait_sec초 내 체결 확인 → ③미체결분은 취소 후 시장가 폴백.
+        급락 순간 시장가 슬리피지(-1.5% 설정 → -2.18% 실측)를 상한으로 제한하는 목적.
+        어떤 단계든 실패하면 시장가 폴백(청산 확실성 우선).
+        """
+        import time as _time
+        cfg = load_config()
+        if not cfg["enabled"] or self.engine not in cfg.get("armed_engines", []):
+            return self.execute_sell(client, market, volume, krw_hint)  # dry 경로 재사용
+        coin = market.split("-")[1]
+        # ① 호가 조회 → 지정가 산출 (실패 시 시장가 폴백)
+        try:
+            ob = client.get_orderbook(coin)
+            best_bid = max(float(b["price"]) for b in ob.get("bids", []))
+            limit_px = best_bid * (1 - limit_slip_pct / 100)
+        except Exception as e:
+            log.warning(f"[{self.engine}] 소프트스탑 호가조회 실패({e}) → 시장가 폴백")
+            return self.execute_sell(client, market, volume, krw_hint)
+        # ② 지정가 매도
+        try:
+            res = client.limit_sell(market, limit_px, volume)
+            uuid = res.get("uuid")
+        except Exception as e:
+            log.warning(f"[{self.engine}] 소프트스탑 지정가 실패({e}) → 시장가 폴백")
+            return self.execute_sell(client, market, volume, krw_hint)
+        self._ledger("sell", market, 0, volume, f"SOFT-LIMIT@{limit_px:.4f}:{res}")
+        # ③ 체결 대기
+        deadline = _time.time() + wait_sec
+        remaining = volume
+        while _time.time() < deadline:
+            _time.sleep(1.5)
+            try:
+                od = client.get_order(uuid)
+                remaining = float(od.get("remaining_volume", 0) or 0)
+                if remaining <= 0:
+                    log.warning(f"[{self.engine}] ★소프트스탑 전량체결 {market} @{limit_px:.4f}")
+                    s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - krw_hint); _save_state(s)
+                    return {"live": True, "result": od, "soft": True}
+            except Exception:
+                pass
+        # ④ 미체결분 취소 후 시장가 폴백
+        try: client.cancel_order(uuid)
+        except Exception: pass
+        try:
+            bal = client.get_balance(coin)
+            for a in bal:
+                if a.get("currency") == coin:
+                    b = float(a.get("balance", 0) or 0)
+                    if b > 0: remaining = min(remaining if remaining > 0 else volume, b)
+        except Exception: pass
+        if remaining > 0:
+            log.warning(f"[{self.engine}] 소프트스탑 {wait_sec}s 미체결 {remaining:.8f} → 시장가 폴백")
+            return self.execute_sell(client, market, remaining, krw_hint * (remaining / volume if volume else 1))
+        s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - krw_hint); _save_state(s)
+        return {"live": True, "result": "soft-filled", "soft": True}
+
     def record_realized(self, pnl_krw: float):
         """실전 포지션 청산 시 실현손익 기록 → 일일 손실한도 추적."""
         s = _load_state(); s["realized_pnl_today"] += pnl_krw; _save_state(s)
