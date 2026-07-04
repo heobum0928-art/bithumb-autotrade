@@ -56,6 +56,9 @@ BOTS = {
     # 실측 15건도 -46.21%p 일치 확인. "오른 코인 추격"이 알트에서 전 타임프레임 역효과 (#42)
     "volaccum_trader":       ROOT / "scripts" / "volaccum_trader.py",  # 거래량매집 단타 (#43, 20~80배 스파이크 모의, TP+3% SL-3% 2H)
     # "spike_tracker" 제거 (2026-06-30): volume_radar와 역할 겹침, 불필요
+    "upbit_notice_monitor":  ROOT / "scripts" / "upbit_notice_monitor.py",   # 업비트 상장공지 감지지연 측정 (순수로깅·매매0)
+    "binance_notice_monitor": ROOT / "scripts" / "binance_notice_monitor.py", # 바이낸스 상장공지 감지지연 측정 (순수로깅·매매0)
+    "reaction_paper_trader": ROOT / "scripts" / "reaction_paper_trader.py",  # #45 상장공지 반응 모의매매 (순수모의·매매0, 손절-3%/트레일만/익절상한없음)
 }
 
 
