@@ -60,6 +60,7 @@ BOTS = {
     "binance_notice_monitor": ROOT / "scripts" / "binance_notice_monitor.py", # 바이낸스 상장공지 감지지연 측정 (순수로깅·매매0)
     "reaction_paper_trader": ROOT / "scripts" / "reaction_paper_trader.py",  # #45 상장공지 반응 모의매매 (순수모의·매매0, 손절-3%/트레일만/익절상한없음)
     "orderflow_logger":      ROOT / "scripts" / "orderflow_logger.py",       # 체결방향 불균형(OFI) 로거 (순수로깅·매매0, 백테스트용 데이터 축적)
+    "quiet_accum_screener":  ROOT / "scripts" / "quiet_accum_screener.py",   # #47 조용한 매집 스크리너 (거래대금상위+안오름+OFI매수우위 겹침, 순수로깅·매매0)
 }
 
 
