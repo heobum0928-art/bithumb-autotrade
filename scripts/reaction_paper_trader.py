@@ -62,6 +62,7 @@ SL_PCT = -3.0
 TRAIL_ARM = 5.0
 TRAIL_PCT = -5.0
 MAX_HOLD_H = 72
+MIN_VOL_24H_KRW = 300_000_000  # 캐스케이드와 동일 유동성 하한 — 너무 얇은 코인은 모의진입해도 현실성 없음
 
 SYMBOL_RE = re.compile(r"\(([A-Z0-9]{2,15})\)")
 
@@ -94,6 +95,11 @@ def log_trade(row):
 
 def price(c, coin):
     try: return float(c.get_ticker(coin)["closing_price"])
+    except Exception: return 0.0
+
+
+def trade_value_24h(c, coin):
+    try: return float(c.get_ticker(coin).get("acc_trade_value_24H", 0))
     except Exception: return 0.0
 
 
@@ -161,6 +167,10 @@ def main():
                 cur = price(c, sym)
                 if cur <= 0:
                     log.warning(f"진입 스킵 {sym}({source}) — 현재가 조회 실패")
+                    continue
+                vol24 = trade_value_24h(c, sym)
+                if vol24 < MIN_VOL_24H_KRW:
+                    log.warning(f"진입 스킵 {sym}({source}) — 유동성 부족(24H거래대금 {vol24:,.0f}<{MIN_VOL_24H_KRW:,.0f})")
                     continue
                 pos[key] = {"symbol": sym, "source": source, "delay": delay,
                             "entry_price": cur, "peak_price": cur,
