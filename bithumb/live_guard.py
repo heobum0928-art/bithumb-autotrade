@@ -72,6 +72,25 @@ def _save_state(s: dict):
         log.warning(f"state 저장 실패: {e}")
 
 
+def _tick_size(price: float) -> float:
+    """빗썸(업비트 API2.0 동일 규격) KRW마켓 호가단위. 구간별 유효 최소 가격증분."""
+    brackets = [
+        (2_000_000, 1000), (1_000_000, 500), (500_000, 100), (100_000, 50),
+        (10_000, 10), (1_000, 1), (100, 0.1), (10, 0.01), (1, 0.001),
+        (0.1, 0.0001), (0.01, 0.00001), (0.001, 0.000001), (0.0001, 0.0000001),
+    ]
+    for floor, tick in brackets:
+        if price >= floor:
+            return tick
+    return 0.00000001
+
+
+def round_to_tick(price: float) -> float:
+    """가격을 호가단위 배수로 반올림 — 안 맞으면 지정가 주문이 400으로 거부됨(2026-07-04 NEX 실전 확인)."""
+    tick = _tick_size(price)
+    return round(round(price / tick) * tick, 10)
+
+
 def live_status() -> dict:
     """현재 실전 가드 상태(브리핑/표시용)."""
     cfg = load_config(); s = _load_state()
@@ -169,7 +188,7 @@ class LiveGuard:
         try:
             ob = client.get_orderbook(coin)
             best_bid = max(float(b["price"]) for b in ob.get("bids", []))
-            limit_px = best_bid * (1 - limit_slip_pct / 100)
+            limit_px = round_to_tick(best_bid * (1 - limit_slip_pct / 100))
         except Exception as e:
             log.warning(f"[{self.engine}] 소프트스탑 호가조회 실패({e}) → 시장가 폴백")
             return self.execute_sell(client, market, volume, krw_hint)
