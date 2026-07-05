@@ -151,6 +151,28 @@ class LiveGuard:
         self._ledger("buy", market, krw, 0, res)
         return {"live": True, "result": res}
 
+    def _actual_fill_funds(self, client, uuid: str, max_wait: float = 6.0):
+        """시장가 주문의 실제 체결 KRW(executed_funds) 짧게 폴링 조회 (2026-07-05 추가).
+
+        기존엔 주문 직후 응답(대개 state=wait, executed_funds=0)이나 호출부가 넘긴
+        추정가(krw_hint, 주문 전 조회한 ticker가 기준)로 노출액(exposure)을 계산해서,
+        손절처럼 가격이 진입가보다 낮게 체결될 때 항상 실제보다 적게 차감되는
+        결정론적 오차가 있었음(잔여 노출액 버그의 원인). 실패 시 None 반환 → 호출부가
+        krw_hint로 폴백(청산 확실성 우선, 정확도보다 안전 우선).
+        """
+        import time as _time
+        if not uuid: return None
+        deadline = _time.time() + max_wait
+        while _time.time() < deadline:
+            try:
+                od = client.get_order(uuid)
+                if od.get("state") == "done":
+                    return float(od.get("executed_funds", 0) or 0)
+            except Exception:
+                pass
+            _time.sleep(1.0)
+        return None
+
     def execute_sell(self, client, market: str, volume: float, krw_hint: float = 0.0) -> dict:
         cfg = load_config()
         # 매도는 보유 청산이므로 자본가드 무관, 단 글로벌 OFF/미arm이면 실행 안 함(모의 일관성)
@@ -165,10 +187,12 @@ class LiveGuard:
             log.error(f"[{self.engine}] 실매도 실패 {market}: {e}")
             self._ledger("sell", market, 0, volume, f"ERR:{e}")
             return {"error": str(e)}
-        s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - krw_hint); _save_state(s)
+        actual = self._actual_fill_funds(client, res.get("uuid"))
+        exposure_delta = actual if actual is not None else krw_hint
+        s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - exposure_delta); _save_state(s)
         log.warning(f"[{self.engine}] ★실매도 {market} {volume:.8f} → {res}")
         self._ledger("sell", market, 0, volume, res)
-        return {"live": True, "result": res}
+        return {"live": True, "result": res, "actual_funds": actual}
 
     def execute_sell_soft(self, client, market: str, volume: float, krw_hint: float = 0.0,
                           limit_slip_pct: float = 0.3, wait_sec: float = 8.0) -> dict:
@@ -210,8 +234,10 @@ class LiveGuard:
                 remaining = float(od.get("remaining_volume", 0) or 0)
                 if remaining <= 0:
                     log.warning(f"[{self.engine}] ★소프트스탑 전량체결 {market} @{limit_px:.4f}")
-                    s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - krw_hint); _save_state(s)
-                    return {"live": True, "result": od, "soft": True}
+                    actual = float(od.get("executed_funds", 0) or 0) or None  # 이미 조회한 실제 체결액 재사용
+                    exposure_delta = actual if actual else krw_hint
+                    s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - exposure_delta); _save_state(s)
+                    return {"live": True, "result": od, "soft": True, "actual_funds": actual}
             except Exception:
                 pass
         # ④ 미체결분 취소 후 시장가 폴백
@@ -227,8 +253,10 @@ class LiveGuard:
         if remaining > 0:
             log.warning(f"[{self.engine}] 소프트스탑 {wait_sec}s 미체결 {remaining:.8f} → 시장가 폴백")
             return self.execute_sell(client, market, remaining, krw_hint * (remaining / volume if volume else 1))
-        s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - krw_hint); _save_state(s)
-        return {"live": True, "result": "soft-filled", "soft": True}
+        actual = self._actual_fill_funds(client, uuid, max_wait=3.0)
+        exposure_delta = actual if actual is not None else krw_hint
+        s = _load_state(); s["open_exposure_krw"] = max(0.0, s["open_exposure_krw"] - exposure_delta); _save_state(s)
+        return {"live": True, "result": "soft-filled", "soft": True, "actual_funds": actual}
 
     def record_realized(self, pnl_krw: float):
         """실전 포지션 청산 시 실현손익 기록 → 일일 손실한도 추적."""
