@@ -11,6 +11,15 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.bithumb.com"
+DEFAULT_TIMEOUT = 10  # 초 — 2026-07-05: newlisting_monitor가 타임아웃 없어 43시간+ 무한대기로 멈춘 사고 발견 후 추가
+
+
+class _TimeoutHTTPAdapter(requests.adapters.HTTPAdapter):
+    """모든 요청에 기본 타임아웃 강제 적용 — 호출부에서 timeout 안 넘겨도 무한대기 방지."""
+    def send(self, request, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = DEFAULT_TIMEOUT
+        return super().send(request, **kwargs)
 
 
 class BithumbClient:
@@ -20,6 +29,9 @@ class BithumbClient:
         self._api_secret = cfg["bithumb"]["api_secret"]
         self._session = requests.Session()
         self._session.headers.update({"Accept": "application/json"})
+        adapter = _TimeoutHTTPAdapter()
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     # ------------------------------------------------------------------
     # Public API (no auth) — legacy endpoints still active
