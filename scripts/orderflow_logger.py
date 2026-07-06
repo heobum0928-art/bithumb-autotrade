@@ -70,7 +70,7 @@ def logwhale(row):
     new = not WHALE_CSV.exists()
     with open(WHALE_CSV, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        if new: w.writerow(["time", "coin", "side", "size_krw", "ratio_to_median", "price", "val_24h_eok"])
+        if new: w.writerow(["time", "coin", "side", "size_krw", "ratio_to_median", "price", "val_24h_eok", "range_pos_2h"])
         w.writerow(row)
 
 
@@ -85,6 +85,28 @@ def build_universe(c):
         if vol >= MIN_VOL_24H_KRW:
             out.append(coin)
     return out
+
+
+def range_position(c, coin, bars=24):
+    """최근 N개 5분봉(기본 2시간) 고저 대비 현재가 위치 (0=바닥권, 1=고점권).
+
+    2026-07-07: BLUR 사례 — 고래발자국이 박스권 바닥(30.04, 위치≈0.1)에서 뜨고 +8%
+    올랐음. 같은 배율의 고래발자국이라도 이미 고점권(위치≈0.9)에서 뜨면 추격매수
+    위험이 커서, 기술적 위치를 같이 봐야 신호 품질을 구분할 수 있음.
+    """
+    try:
+        cl = c.get_candles(f"KRW-{coin}", unit=5, count=bars)
+    except Exception:
+        return None
+    if not cl or len(cl) < 5:
+        return None
+    highs = [x["high_price"] for x in cl]
+    lows = [x["low_price"] for x in cl]
+    hi, lo = max(highs), min(lows)
+    if hi <= lo:
+        return None
+    cur = cl[0]["trade_price"]  # 최신봉(newest-first)
+    return (cur - lo) / (hi - lo)
 
 
 def compute_ofi(c, coin):
@@ -158,12 +180,19 @@ def main():
                         and whale_cooldown.get(coin, 0) <= time.time()):
                     whale_cooldown[coin] = time.time() + WHALE_COOLDOWN_MIN * 60
                     side_kr = "매수" if whale_side == "bid" else "매도"
+                    rpos = range_position(c, coin)
+                    rpos_str = f"{rpos:.2f}" if rpos is not None else ""
+                    zone = ""
+                    if rpos is not None:
+                        zone = "바닥권" if rpos <= 0.3 else ("고점권" if rpos >= 0.7 else "중간")
                     logwhale([datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"), coin, whale_side,
-                              f"{whale_size:.0f}", f"{whale_ratio:.1f}", f"{price:g}", f"{val24/1e8:.1f}"])
-                    log.warning(f"고래발자국 {coin} {side_kr} {whale_size:,.0f}원(중앙값 {whale_ratio:.1f}배) 현재가={price:g}")
+                              f"{whale_size:.0f}", f"{whale_ratio:.1f}", f"{price:g}", f"{val24/1e8:.1f}", rpos_str])
+                    log.warning(f"고래발자국 {coin} {side_kr} {whale_size:,.0f}원(중앙값 {whale_ratio:.1f}배) "
+                                f"현재가={price:g} 위치={zone}({rpos_str})")
                     try:
                         from bithumb import notify
-                        notify.send(f"🐋 고래발자국 {coin} {side_kr} {whale_size/1e6:.1f}백만원({whale_ratio:.0f}배) 현재가={price:g}")
+                        notify.send(f"🐋 고래발자국 {coin} {side_kr} {whale_size/1e6:.1f}백만원({whale_ratio:.0f}배) "
+                                    f"현재가={price:g} [{zone}]")
                     except Exception: pass
                 time.sleep(per_coin_sleep)
         except Exception as e:
