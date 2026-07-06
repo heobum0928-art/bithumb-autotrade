@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 STABLE = {"USDT", "USDC", "DAI", "TUSD", "BUSD", "FDUSD", "PYUSD", "USDS", "KRW"}
 MIN_VOL_24H_KRW = 1_000_000_000  # 유동성 상위만(1분 새 20건 체결이 몰릴 정도) — 얇은 코인은 20건이 몇시간치라 신호 무의미
 LOOP_SEC = 90            # 전체 유니버스 한 바퀴 목표 주기
-UNIVERSE_REFRESH_MIN = 30
+UNIVERSE_REFRESH_MIN = 10   # 2026-07-06: 30→10분(BLUR 폭발 사례 — 갱신주기 탓에 유동성기준 넘고도 30분간 감시목록 밖이었음)
 CSV_PATH = ROOT / "data" / "orderflow_events.csv"
 
 # 고래 발자국(대형 개별거래) 감지 (2026-07-06)
