@@ -51,12 +51,26 @@ LOOP_SEC = 90            # 전체 유니버스 한 바퀴 목표 주기
 UNIVERSE_REFRESH_MIN = 30
 CSV_PATH = ROOT / "data" / "orderflow_events.csv"
 
+# 고래 발자국(대형 개별거래) 감지 (2026-07-06)
+WHALE_RATIO_MIN = 8.0        # 같은 20건 내 중앙값 대비 최소 배율
+WHALE_MIN_KRW = 3_000_000    # 절대 최소액(너무 작은 코인의 사소한 튐 배제)
+WHALE_COOLDOWN_MIN = 10
+WHALE_CSV = ROOT / "data" / "whale_print_events.csv"
+
 
 def logrow(row):
     new = not CSV_PATH.exists()
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if new: w.writerow(["time", "coin", "ofi", "n_trades", "span_sec", "price", "val_24h_eok"])
+        w.writerow(row)
+
+
+def logwhale(row):
+    new = not WHALE_CSV.exists()
+    with open(WHALE_CSV, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new: w.writerow(["time", "coin", "side", "size_krw", "ratio_to_median", "price", "val_24h_eok"])
         w.writerow(row)
 
 
@@ -91,17 +105,28 @@ def compute_ofi(c, coin):
         span = abs((newest - oldest).total_seconds())
     except Exception:
         span = 0
-    return ofi, len(trades), span
+    # 대형 개별거래("고래 발자국") 감지 — 같은 20건 안에서 중앙값 대비 최대 단일거래 배율
+    # (2026-07-06: 온체인 웨일얼럿은 이미 기각됐으나, 이건 지갑이동이 아니라 거래소 체결
+    #  자체를 보는 거라 지연·모호함이 없어 별도 검증 대상)
+    sizes = sorted(float(t_["total"]) for t_ in trades)
+    median_size = sizes[len(sizes) // 2]
+    max_trade = max(trades, key=lambda t_: float(t_["total"]))
+    max_size = float(max_trade["total"])
+    whale_ratio = (max_size / median_size) if median_size > 0 else 0
+    whale_side = max_trade.get("type")
+    return ofi, len(trades), span, whale_ratio, max_size, whale_side
 
 
 def main():
     c = BithumbClient()
     universe = build_universe(c)
     last_universe_refresh = time.time()
-    log.info(f"체결방향 불균형 로거 시작 — 유동성{MIN_VOL_24H_KRW/1e8:.0f}억+ {len(universe)}코인 | 순환주기~{LOOP_SEC}s | 순수로깅(매매0)")
+    whale_cooldown = {}
+    log.info(f"체결방향 불균형 로거 시작 — 유동성{MIN_VOL_24H_KRW/1e8:.0f}억+ {len(universe)}코인 | 순환주기~{LOOP_SEC}s | "
+             f"고래발자국 배율{WHALE_RATIO_MIN}x+/{WHALE_MIN_KRW/1e6:.0f}백만원+ | 순수로깅(매매0)")
     try:
         from bithumb import notify
-        notify.send(f"📡 체결방향 불균형(OFI) 로거 시작 — {len(universe)}코인 순수로깅, 매매0")
+        notify.send(f"📡 체결방향 불균형(OFI)+고래발자국 로거 시작 — {len(universe)}코인 순수로깅, 매매0")
     except Exception: pass
 
     while True:
@@ -117,7 +142,7 @@ def main():
                 res = compute_ofi(c, coin)
                 if res is None:
                     time.sleep(per_coin_sleep); continue
-                ofi, n, span = res
+                ofi, n, span, whale_ratio, whale_size, whale_side = res
                 d = t_all.get(coin, {})
                 try:
                     price = float(d.get("closing_price", 0))
@@ -128,6 +153,18 @@ def main():
                         f"{ofi:.4f}", n, f"{span:.0f}", f"{price:g}", f"{val24/1e8:.1f}"])
                 if abs(ofi) >= 0.7:
                     log.info(f"극단OFI {coin} ofi={ofi:+.2f} n={n} span={span:.0f}s 현재가={price:g}")
+
+                if (whale_ratio >= WHALE_RATIO_MIN and whale_size >= WHALE_MIN_KRW
+                        and whale_cooldown.get(coin, 0) <= time.time()):
+                    whale_cooldown[coin] = time.time() + WHALE_COOLDOWN_MIN * 60
+                    side_kr = "매수" if whale_side == "bid" else "매도"
+                    logwhale([datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"), coin, whale_side,
+                              f"{whale_size:.0f}", f"{whale_ratio:.1f}", f"{price:g}", f"{val24/1e8:.1f}"])
+                    log.warning(f"고래발자국 {coin} {side_kr} {whale_size:,.0f}원(중앙값 {whale_ratio:.1f}배) 현재가={price:g}")
+                    try:
+                        from bithumb import notify
+                        notify.send(f"🐋 고래발자국 {coin} {side_kr} {whale_size/1e6:.1f}백만원({whale_ratio:.0f}배) 현재가={price:g}")
+                    except Exception: pass
                 time.sleep(per_coin_sleep)
         except Exception as e:
             log.error(f"루프오류: {e}")
