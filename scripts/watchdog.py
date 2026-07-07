@@ -62,6 +62,7 @@ BOTS = {
     "orderflow_logger":      ROOT / "scripts" / "orderflow_logger.py",       # 체결방향 불균형(OFI) 로거 (순수로깅·매매0, 백테스트용 데이터 축적)
     "quiet_accum_screener":  ROOT / "scripts" / "quiet_accum_screener.py",   # #47 조용한 매집 스크리너 (거래대금상위+안오름+OFI매수우위 겹침, 순수로깅·매매0)
     "breadth_monitor":       ROOT / "scripts" / "breadth_monitor.py",       # 시장전체 로테이션(breadth) 배경모니터 (순수로깅·매매0, 매수신호 아님)
+    "whale_print_paper_trader": ROOT / "scripts" / "whale_print_paper_trader.py",  # #49 고래발자국(바닥권) 반응 모의매매 (순수모의·매매0)
 }
 
 
