@@ -44,6 +44,8 @@ log = logging.getLogger(__name__)
 API = "https://api-manager.upbit.com/api/v1/announcements"
 POLL_SEC = 3          # 폴링 주기 (측정 목적 — 실전에선 API 부담과 트레이드오프 판단 필요)
 KEYWORDS = ["원화 마켓 추가", "거래지원 안내", "마켓 추가", "신규 거래지원", "KRW 마켓"]
+# 2026-07-09: 동결펌핑 forward 표본 축적 — 유의지정/입출금정지 공지도 알림 (기록은 원래 전 공지 대상)
+CAUTION_KEYWORDS = ["유의 종목 지정", "유의종목 지정", "유의 촉구", "입출금 일시 중단", "입출금 일시 중지", "거래지원 종료"]
 KNOWN = ROOT / "data" / "upbit_notice_known.json"
 CSV_PATH = ROOT / "data" / "upbit_notice_events.csv"
 
@@ -106,12 +108,13 @@ def main():
                 is_listing = any(k in title for k in KEYWORDS)
                 logrow([detected.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3], nid,
                         n.get("listed_at", ""), f"{delay:.1f}" if delay is not None else "", is_listing, title])
-                tag = "🆕상장" if is_listing else "공지"
+                is_caution = any(k in title for k in CAUTION_KEYWORDS)
+                tag = "🆕상장" if is_listing else ("⚠️유의/동결" if is_caution else "공지")
                 log.warning(f"{tag} 감지 [{nid}] delay={delay:.1f}s '{title}'" if delay is not None else f"{tag} 감지 [{nid}] '{title}'")
-                if is_listing:
+                if is_listing or is_caution:
                     try:
                         from bithumb import notify
-                        notify.send(f"🆕 업비트 상장관련 공지 감지! delay={delay:.1f}초\n{title}")
+                        notify.send(f"{'🆕 업비트 상장관련' if is_listing else '⚠️ 업비트 유의/동결'} 공지 감지! delay={delay:.1f}초\n{title}")
                     except Exception: pass
             if new_ones:
                 save_known(known)
