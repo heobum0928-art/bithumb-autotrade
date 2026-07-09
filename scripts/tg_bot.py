@@ -24,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 KIS_PATH = Path("C:/code/kis-autotrade")
 sys.path.insert(0, str(KIS_PATH))
 
+import manual_trader
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [TG][%(levelname)s] %(message)s",
@@ -231,11 +233,16 @@ def cmd_kis() -> str:
     return "\n".join(lines)
 
 
+def cmd_manual_status() -> str:
+    return manual_trader.status_text()
+
+
 COMMANDS = {
     "/status": cmd_status,
     "/trades": cmd_trades,
     "/pnl":    cmd_pnl,
     "/kis":    cmd_kis,
+    "/재량":     cmd_manual_status,
 }
 
 HELP_TEXT = (
@@ -243,8 +250,13 @@ HELP_TEXT = (
     "/status — 빗썸 봇 상태 · 포지션 · 쿨다운\n"
     "/trades — 오늘 거래 내역\n"
     "/pnl    — 최근 7일 손익\n"
-    "/kis    — KIS 계좌 · 보유 종목"
+    "/kis    — KIS 계좌 · 보유 종목\n"
+    "\n<b>[재량매매]</b> (기본 모의/dry — data/live_config.json armed_engines에 manual 추가 전까지 실전 안 나감)\n"
+    "/사 코인명 — 재량 진입 (예: /사 MPLX). 변동성 실측 기반 손절·트레일 자동 설정, 익절상한 없음\n"
+    "/재량   — 열린 재량 포지션 상태"
 )
+
+MANUAL_CHECK_INTERVAL_SEC = 15
 
 
 # ── Main polling loop ─────────────────────────────────────────────────────────
@@ -258,29 +270,49 @@ def main() -> None:
     send("✅ 트레이딩 봇 챗봇 시작\n" + HELP_TEXT)
 
     offset = 0
+    last_manual_check = 0.0
     while True:
         updates = get_updates(offset)
         for upd in updates:
             offset = upd["update_id"] + 1
             msg = upd.get("message", {})
             chat_id = str(msg.get("chat", {}).get("id", ""))
-            text = msg.get("text", "").strip().lower()
+            text_raw = msg.get("text", "").strip()
+            text = text_raw.lower()
 
             # 등록된 chat_id 만 응답
             if chat_id != CHAT_ID:
                 log.warning(f"알 수 없는 chat_id: {chat_id}")
                 continue
 
-            log.info(f"명령: {text}")
-            cmd = text.split()[0] if text else ""
-            if cmd in COMMANDS:
+            log.info(f"명령: {text_raw}")
+            parts = text_raw.split()
+            cmd = parts[0].lower() if parts else ""
+
+            if cmd == "/사" and len(parts) >= 2:
+                try:
+                    reply = manual_trader.enter(parts[1])
+                except Exception as e:
+                    log.error(f"재량진입 오류: {e}")
+                    reply = f"❌ 진입 처리 중 오류: {e}"
+            elif cmd in COMMANDS:
                 reply = COMMANDS[cmd]()
             elif cmd in ("/help", "/start"):
                 reply = HELP_TEXT
             else:
-                reply = f"모르는 명령어: {text}\n" + HELP_TEXT
+                reply = f"모르는 명령어: {text_raw}\n" + HELP_TEXT
 
             send(reply, chat_id)
+
+        # 재량매매 포지션 손절/트레일 주기 점검 (텔레그램 응답과 무관하게 계속 돔)
+        now = time.time()
+        if now - last_manual_check >= MANUAL_CHECK_INTERVAL_SEC:
+            last_manual_check = now
+            try:
+                for m in manual_trader.check_positions():
+                    send(m)
+            except Exception as e:
+                log.error(f"재량매매 포지션 점검 오류: {e}")
 
         time.sleep(1)
 

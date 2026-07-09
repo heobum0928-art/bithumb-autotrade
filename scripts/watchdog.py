@@ -35,7 +35,9 @@ CHECK_INTERVAL = 30  # 초마다 프로세스 확인
 
 BOTS = {
     "tg_bot":                ROOT / "scripts" / "tg_bot.py",
-    "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
+    # "claude_intelligence" 제거 (2026-07-09): claude CLI 서브프로세스 호출이 계속 실패
+    # (WinError 2, 5분마다 헛돌기만 함) + 사용자 지시로 오토리서치/루프 당분간 중단.
+    # "claude_intelligence":   ROOT / "scripts" / "claude_intelligence.py",  # CI Mode
     # "swing_monitor" 제거 (2026-06-30): 스윙 전략 없음, 불필요
     # "vb_trader" 제거 (2026-06-25): forward t=-4.29, 승률17% — 폐기 확정
     "retest_trader":         ROOT / "scripts" / "retest_trader.py",    # 돌파-재테스트 전략 B (모의 검증 중)
