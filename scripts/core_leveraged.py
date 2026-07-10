@@ -166,14 +166,19 @@ def rebalance(s, target_frac, price, reason):
 
 
 def live_rebalance(guard, target_frac, price):
-    """실전 모드 — 바이낸스 실잔고 기준 목표 명목노출까지 가드 통해 실주문.
-    명목 = 선물잔고 × target_frac × LEVERAGE. 가드가 4중 관문·자본상한 강제."""
+    """실전 모드 — 목표 명목노출까지 가드 통해 실주문.
+    증거금 = min(선물잔고, 엔진상한) × target_frac. 명목 = 증거금 × LEVERAGE.
+    ★ 잔고가 상한보다 커도 상한만큼만 사용(소액검증 안전) — 상한이 진입을 막지 않고 규모만 제한."""
+    from bithumb.binance_guard import load_config
     usdt = get_futures_usdt()
     if usdt <= 0:
         log.warning("[LIVE] 선물잔고 0 또는 조회실패 — 거래 보류"); return
-    target_notional = usdt * target_frac * LEVERAGE
+    cap = load_config().get("engine_caps_usdt", {}).get(ENGINE, 0)
+    margin_base = min(usdt, cap)                    # 상한 안으로 제한
+    target_notional = margin_base * target_frac * LEVERAGE
     res = guard.rebalance_long(target_notional)
-    log.warning(f"[LIVE] 코어 목표명목 {target_notional:.1f} USDT(잔고{usdt:.1f}×{target_frac:.0%}×{LEVERAGE:.0f}배) → {res}")
+    log.warning(f"[LIVE] 코어 목표명목 {target_notional:.1f} USDT"
+                f"(증거금 min(잔고{usdt:.0f},상한{cap})×{target_frac:.0%}×{LEVERAGE:.0f}배) → {res}")
     try:
         tag = "실주문" if res.get("live") else ("스킵" if res.get("skip") else f"dry({res.get('reason','')})")
         notify.send(f"[CORE-LEV-LIVE] 목표 {target_frac:.0%}×{LEVERAGE:.0f}배 명목{target_notional:.0f}USDT @{price:,.0f} — {tag}")
