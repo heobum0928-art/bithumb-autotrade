@@ -43,6 +43,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import requests
 from bithumb import notify
+from bithumb.binance_guard import BinanceGuard, live_status as bn_live_status, get_futures_usdt, get_position
+
+ENGINE = "core_lev"
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [CORE-LEV] %(message)s",
@@ -162,13 +165,31 @@ def rebalance(s, target_frac, price, reason):
     return True
 
 
+def live_rebalance(guard, target_frac, price):
+    """실전 모드 — 바이낸스 실잔고 기준 목표 명목노출까지 가드 통해 실주문.
+    명목 = 선물잔고 × target_frac × LEVERAGE. 가드가 4중 관문·자본상한 강제."""
+    usdt = get_futures_usdt()
+    if usdt <= 0:
+        log.warning("[LIVE] 선물잔고 0 또는 조회실패 — 거래 보류"); return
+    target_notional = usdt * target_frac * LEVERAGE
+    res = guard.rebalance_long(target_notional)
+    log.warning(f"[LIVE] 코어 목표명목 {target_notional:.1f} USDT(잔고{usdt:.1f}×{target_frac:.0%}×{LEVERAGE:.0f}배) → {res}")
+    try:
+        tag = "실주문" if res.get("live") else ("스킵" if res.get("skip") else f"dry({res.get('reason','')})")
+        notify.send(f"[CORE-LEV-LIVE] 목표 {target_frac:.0%}×{LEVERAGE:.0f}배 명목{target_notional:.0f}USDT @{price:,.0f} — {tag}")
+    except Exception: pass
+
+
 def main():
     s = load_state()
-    log.info(f"레버리지 코어 시작(모의) — SMA{SMA_FAST}>SCOUT30%×{LEVERAGE:.0f}배 / "
+    ls = bn_live_status()
+    _live = bool(ls.get("enabled")) and ENGINE in ls.get("armed", [])
+    mode = f"🔴실전(바이낸스, {LEVERAGE:.0f}배)" if _live else "🔵순수모의(실주문 불가)"
+    log.info(f"레버리지 코어 시작 [{mode}] — SMA{SMA_FAST}>SCOUT30%×{LEVERAGE:.0f}배 / "
              f"SMA{SMA_SLOW}>FULL100%×{LEVERAGE:.0f}배 | 상태={s['state']} 자산={s['equity']:,.0f}원 "
-             f"| ★현재 실주문 불가(바이낸스 API 키 미연동, 순수 모의)")
+             f"| 가드 enabled={ls.get('enabled')} armed={ls.get('armed')}")
     try:
-        notify.send(f"[CORE-LEV] 레버리지코어 시작 — {LEVERAGE:.0f}배, 순수모의(실주문 불가)")
+        notify.send(f"[CORE-LEV] 레버리지코어 시작 — {mode}")
     except Exception: pass
 
     while True:
@@ -182,18 +203,31 @@ def main():
             except Exception as e:
                 log.warning(f"바이낸스 시세 조회 실패: {e}"); time.sleep(CHECK_SEC); continue
 
-            mark_to_market(s, price)
-            apply_funding(s, price)
-
             target_frac = FULL_FRAC if above200 else (SCOUT_FRAC if above50 else 0.0)
             new_state = "FULL" if above200 else ("SCOUT" if above50 else "CASH")
-            if new_state != s["state"]:
-                rebalance(s, target_frac, price, f"{s['state']}→{new_state}")
-                s["state"] = new_state
-            else:
-                log.info(f"유지 {s['state']} | BTCUSDT {price:,.2f} | 모의자산 {s['equity']:,.0f}원 "
-                         f"({(s['equity']/NOTIONAL_KRW-1)*100:+.1f}%)")
-            save_state(s)
+
+            ls = bn_live_status()
+            live = bool(ls.get("enabled")) and ENGINE in ls.get("armed", [])
+
+            if live:   # ★ 실전 (가드 armed) — 바이낸스 실주문
+                guard = BinanceGuard(ENGINE)
+                if new_state != s["state"]:
+                    live_rebalance(guard, target_frac, price)
+                    s["state"] = new_state; save_state(s)
+                else:
+                    pos = get_position()
+                    log.info(f"[LIVE] 유지 {s['state']} | BTCUSDT {price:,.2f} | 실포지션 {pos['amt']:.4f}BTC "
+                             f"(명목 {pos['notional']:.1f}USDT, 미실현 {pos['unrealized']:+.2f})")
+            else:      # 모의
+                mark_to_market(s, price)
+                apply_funding(s, price)
+                if new_state != s["state"]:
+                    rebalance(s, target_frac, price, f"{s['state']}→{new_state}")
+                    s["state"] = new_state
+                else:
+                    log.info(f"유지 {s['state']} | BTCUSDT {price:,.2f} | 모의자산 {s['equity']:,.0f}원 "
+                             f"({(s['equity']/NOTIONAL_KRW-1)*100:+.1f}%)")
+                save_state(s)
         except KeyboardInterrupt:
             break
         except Exception as e:
