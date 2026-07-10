@@ -50,6 +50,9 @@ FAPI = "https://fapi.binance.com"
 POLL_SEC = 300                # 5분봉 주기에 맞춰 5분 폴링
 PUMP_PCT = 20.0              # 2시간(24봉) 상승률 문턱
 LOOKBACK_SAMPLES = 24        # 2시간 = 5분 x 24
+VOL_MULT = 10.0             # 2026-07-11: 거래량 필터 추가 — 신호봉 거래량 >= 직전20봉평균 10배.
+                            # 백테스트에서 "극단급등(거래량10배+2h+20%)+8h무손절"만 2배청산 0%로
+                            # 유일하게 청산위험 없이 살아남음(TE+8.5%,t2.3,n29). 순도 높은 forward 표본 목적.
 HOLD_SEC = 8 * 3600          # 8시간 홀딩
 COOLDOWN_SEC = 2 * 3600      # 코인당 쿨다운 2시간
 COST_PCT = 0.20             # 왕복 비용
@@ -82,6 +85,27 @@ def all_prices() -> dict:
     r = requests.get(f"{FAPI}/fapi/v1/ticker/price", timeout=10)
     r.raise_for_status()
     return {x["symbol"]: float(x["price"]) for x in r.json()}
+
+
+def volume_spike_ok(sym: str) -> tuple[bool, float]:
+    """가격 급등 후보에 대해서만 호출 — 최근 5분봉 거래량이 직전20봉평균의 VOL_MULT배 이상인지.
+    (조건충족?, 실제배수). 조회 실패 시 (False, 0)."""
+    try:
+        r = requests.get(f"{FAPI}/fapi/v1/klines",
+                         params={"symbol": sym, "interval": "5m", "limit": 25}, timeout=8)
+        if r.status_code != 200:
+            return False, 0.0
+        kl = r.json()
+        vols = [float(x[7]) for x in kl]  # quoteAssetVolume
+        if len(vols) < 21:
+            return False, 0.0
+        avg20 = sum(vols[-21:-1]) / 20
+        if avg20 <= 0:
+            return False, 0.0
+        vr = vols[-1] / avg20
+        return vr >= VOL_MULT, vr
+    except Exception:
+        return False, 0.0
 
 
 def log_trade(row: dict):
@@ -132,14 +156,21 @@ def main():
                     continue
                 ret2h = (px / past - 1) * 100
                 if ret2h >= PUMP_PCT:
+                    # 가격 급등 후보 → 거래량 필터 확인(코인당 1회 klines 조회)
+                    vok, vr = volume_spike_ok(sym)
+                    if not vok:
+                        cooldown[sym] = now + COOLDOWN_SEC  # 이번 급등은 거래량 미달, 쿨다운 걸어 재확인 억제
+                        log.info(f"급등 감지했으나 거래량 미달 스킵 {sym} (2h+{ret2h:.0f}%, 거래량 {vr:.1f}배<{VOL_MULT:.0f})")
+                        continue
                     positions[sym] = {"entry_ts": now, "entry_price": px, "pump": round(ret2h, 2),
+                                      "vol_mult": round(vr, 1),
                                       "exit_ts": now + HOLD_SEC, "min_p": px, "max_p": px,
                                       "entry_iso": datetime.now(KST).isoformat()}
                     cooldown[sym] = now + COOLDOWN_SEC
-                    log.warning(f"숏 진입(모의) {sym} @{px:g} (2h +{ret2h:.1f}%) → 8h후 청산")
+                    log.warning(f"숏 진입(모의) {sym} @{px:g} (2h +{ret2h:.1f}%, 거래량 {vr:.1f}배) → 8h후 청산")
                     try:
                         from bithumb import notify
-                        notify.send(f"📉 블로우오프 숏 진입(모의) {sym} 2h+{ret2h:.0f}% @{px:g}")
+                        notify.send(f"📉 블로우오프 숏 진입(모의) {sym} 2h+{ret2h:.0f}% 거래량{vr:.0f}배 @{px:g}")
                     except Exception: pass
 
             # 2) 열린 포지션 추적 + 만기 청산
