@@ -1,15 +1,15 @@
 """
-마진 숏 실전 트레이더 (margin_short_trader) — 거래량 폭발 급등주 숏.
+마진 숏 실전 트레이더 (margin_short_trader) — 급등주 되돌림 숏 (바이낸스 크로스마진).
 
-검증(2026-07-11): 빗썸∩바이낸스마진숏 314코인 백테스트에서 모든 관문 통과 —
-거래량 8~10배 폭발 + 1~2h +15~20% 급등 → 8h 무손절 숏.
-2배 레버리지 정직계산(청산 3% 반영) 후 TE +11%/건(t2.9), 승률 73%, 상위3코인 제거·train/test 생존.
-이 프로젝트 3개월 만의 첫 전관문 통과 엣지.
+★ 최종 규칙(2026-07-12): 6시간 +40% 급등 → 48시간 숏 (+40% 스탑), 2배.
+   시간대 전수 스위프(2h~72h × 문턱20~60%, 40조합, 날짜클러스터 t) 결과 최적:
+   TEST +38.8%(t4.60), 승률 86%, 2배청산 0%, 4.5건/주. 대출가능 코인만 감시.
+   (이전 24h+40%는 TE +18%/t1.69로 열등 — 짧은 시간대일수록 되돌림이 확실)
 
 동작:
-  ① 바이낸스 전 선물+마진 심볼 5분봉 폴링 → 거래량 VOL_MULT배 & 2h +PUMP% 감지
+  ① 24h 변동률로 1차 스크리닝 → 후보만 5분봉으로 6h 상승률 정밀계산
   ② margin_guard로 크로스마진 숏 진입(증거금 상한 내, 4중 관문)
-  ③ HOLD_H 후 자동 청산(되사서 상환). 무손절(백테스트가 무손절 기준).
+  ③ +40% 스탑 또는 48h 만기 시 자동 청산(되사서 상환)
   ④ 손익 기록.
 
 ★ margin_guard OFF면 자동 dry. 실전은 data/margin_live_config.json arm 필요(현재 arm됨).
@@ -49,18 +49,21 @@ FAPI = "https://fapi.binance.com"; BASE = "https://api.binance.com"
 ENGINE = "mshort"
 POLL_SEC = 300
 
-# ★ 2026-07-11 진입조건 전면교체 — 사용자 패턴이 봇 조건보다 우월함이 데이터로 확인됨.
-# 기존 봇: 2h+20% & 거래량10배 → 3.2건/주, TE +16.6%(t1.6), 승76%, 청산2%
-# 사용자식: 24h +40% (거래량 무관) → 8.1건/주, TE +17.6%(t2.3), 승72%, 청산1%  ★채택
-#   신호 2.5배 + 통계 더 확실(t1.6→2.3) + 청산 더 낮음. RSI 필터 추가는 오히려 악화(t2.2)라 미적용.
-# 근거: 사용자가 감으로 이긴 SKL(24h+55%)·PYR(24h+63%)이 기존 봇 조건엔 안 걸렸음 — 조건 자체가 틀렸던 것.
-# "며칠에 걸쳐 누적 급등"(DEXE: 일봉 MA20이격+47%)도 24h 기준이라야 포착됨.
-PUMP_PCT = 40.0            # 24시간 상승률 문턱
-LOOKBACK = 288             # 24h = 5분 x 288
-VOL_MULT = 0.0            # 거래량 필터 미사용 (검증 결과 불필요 — "많이 올랐다"는 사실 하나면 충분)
+# ★★ 2026-07-12 시간대 전수 스위프 (2h~72h × 문턱20~60%, 40조합, 날짜클러스터 t) — 24h는 나쁜 선택이었음.
+#   짧은 시간대일수록 압도적으로 좋음. 길수록 급격히 악화(24h t1.69 → 48h t0.10 → 72h t0.06).
+#   "짧은 시간에 급하게 오른 것"이 확실히 되돌아옴. 24h+에 걸쳐 서서히 오른 건 진짜 추세일 수 있어 숏이 위험.
+#     24h+40%(이전): 8.2건/주, TE +18.0%(t1.69), 승73%, 청산1%
+#   ★ 6h+40%(채택):  4.5건/주, TE +38.8%(t4.60), 승86%, 청산0%   ← 수익2배·승률+13%p·t 2.7배
+#     4h+40%:        4.0건/주, TE +35.7%(t3.72), 승82%
+#     6h+30%:        8.2건/주, TE +25.5%(t3.50), 승76%  (신호 많이 원하면 대안)
+# 이전 반성: 2h vs 24h 둘만 비교하고 중간(4~6h)을 안 봐서 24h를 골랐던 것. 사용자가 "24h에 걸 필요 없다" 지적.
+PUMP_PCT = 40.0            # 상승률 문턱
+LOOKBACK_H = 6             # ★ 6시간 상승률 기준
+LOOKBACK = 72              # 6h = 5분봉 72개
+VOL_MULT = 0.0            # 거래량 필터 미사용 (검증 결과 불필요)
 HOLD_H = 48
 STOP_PCT = 40.0           # 진입가 대비 +40% 상승 시 손절(2배 청산선 +50% 안쪽)
-COOLDOWN_H = 24           # 24h급등 기준이라 쿨다운도 확대(같은 코인 반복진입 방지)
+COOLDOWN_H = 12           # 코인당 재진입 쿨다운
 MARGIN_PER_TRADE = 100.0  # 증거금(상한과 동일). 실제 사용은 min(잔고,상한)
 
 BUF_PATH = ROOT / "data" / "margin_short_buf.json"
@@ -116,8 +119,7 @@ def _save(p, o):
 
 
 def all_tickers():
-    """전 심볼의 현재가 + 24시간 변동률 한 번에 (24h 급등 판정용).
-    ★ 가격버퍼로 24h를 재려면 288샘플=24시간 대기 필요 → 바이낸스가 직접 주는 24h 변동률 사용."""
+    """전 심볼의 현재가 + 24h 변동률 + 24h 거래대금 (유동성 필터·1차 스크리닝용)."""
     r = requests.get(f"{BASE}/api/v3/ticker/24hr", timeout=15)
     r.raise_for_status()
     out = {}
@@ -129,7 +131,23 @@ def all_tickers():
     return out
 
 
+def pump_6h(sym):
+    """6시간 상승률 — 5분봉 73개 조회해 계산. (상승률, 현재가). 실패 시 (None, 0).
+    ★ 6h는 24h와 달리 API가 바로 안 주므로 klines 계산 필요. 후보에만 호출(1차 스크리닝 통과분)."""
+    try:
+        r = requests.get(f"{BASE}/api/v3/klines", params={"symbol": sym, "interval": "5m", "limit": LOOKBACK + 1}, timeout=8)
+        if r.status_code != 200: return None, 0
+        k = r.json()
+        if len(k) < LOOKBACK + 1: return None, 0
+        past = float(k[0][4]); cur = float(k[-1][4])
+        if past <= 0: return None, 0
+        return (cur / past - 1) * 100, cur
+    except Exception:
+        return None, 0
+
+
 MIN_QUOTE_VOL = 2_000_000   # 24h 거래대금 최소 200만 USDT (유동성 — 체결·대출 가능성 확보)
+PRESCREEN_24H = 15.0        # 1차 스크리닝: 24h가 이 미만이면 6h+40%일 리 없음 → klines 조회 절약
 
 
 def log_trade(row):
@@ -147,9 +165,9 @@ def main():
     last_refresh = 0.0
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
-    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 24h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
+    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 6h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
              f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 {get_margin_usdt():.1f}")
-    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 24h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인")
+    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 6h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인")
     except Exception: pass
 
     while True:
@@ -163,7 +181,8 @@ def main():
             tick = all_tickers()
             guard = MarginGuard(ENGINE)
 
-            # 1) 신호 탐지 — 24h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
+            # 1) 신호 탐지 — 6h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
+            #    1차: 24h 변동률로 후보 추림(6h+40%면 24h도 최소 15%↑) → 2차: 후보만 5분봉으로 6h 정밀계산
             for coin in UNIVERSE:
                 sym = f"{coin}USDT"
                 t = tick.get(sym)
@@ -172,15 +191,19 @@ def main():
                 if px <= 0 or qvol < MIN_QUOTE_VOL: continue
                 if sym in positions or cooldown.get(sym, 0) > now:
                     continue
-                if chg24 < PUMP_PCT:
+                if chg24 < PRESCREEN_24H:      # 1차 스크리닝 (klines 조회 절약)
                     continue
-                ret2h = chg24   # 기록용(24h 상승률)
+                ret6h, px6 = pump_6h(sym)      # 2차 정밀 — 6시간 상승률
+                if ret6h is None or ret6h < PUMP_PCT:
+                    continue
+                if px6 > 0: px = px6
+                ret2h = ret6h   # 기록용(6h 상승률)
                 vr = 0.0
                 # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 전체상한 초과 방지)
                 open_margin = sum(p["margin"] for p in positions.values())
                 gcap = load_config().get("global_cap_usdt", 0)
                 if open_margin + MARGIN_PER_TRADE > gcap:
-                    log.info(f"진입 보류 {sym}(24h+{chg24:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>전체상한 {gcap}")
+                    log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>전체상한 {gcap}")
                     continue
                 # 진입
                 margin = min(MARGIN_PER_TRADE, get_margin_usdt())
@@ -190,8 +213,8 @@ def main():
                     positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": res.get("price", px),
                                       "qty": res["qty"], "margin": margin, "pump": round(ret2h,1), "vr": round(vr,1),
                                       "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
-                    log.warning(f"★실전 마진숏 진입 {sym} 24h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
-                    try: notify.send(f"📉 마진숏 진입 {sym} 24h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
+                    log.warning(f"★실전 마진숏 진입 {sym} 6h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
+                    try: notify.send(f"📉 마진숏 진입 {sym} 6h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
                     except Exception: pass
                 else:
                     log.info(f"진입 dry/실패 {sym}: {res}")
