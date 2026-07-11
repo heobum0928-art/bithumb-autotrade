@@ -47,6 +47,7 @@ BOTS = {
     "core_trader":           ROOT / "scripts" / "core_trader.py",      # 코어 BTC 사이클타이밍 (검증엔진·모의 추적)
     "core_leveraged":        ROOT / "scripts" / "core_leveraged.py",   # 코어+2배 레버리지 (바이낸스 선물 모의추적, 2026-07-09)
     "blowoff_short_paper":   ROOT / "scripts" / "blowoff_short_paper.py",  # 급등되돌림 숏 페이퍼 (바이낸스, REAL_MARGINAL forward검증, 2026-07-10)
+    "margin_short_trader":   ROOT / "scripts" / "margin_short_trader.py",  # ★거래량폭발 급등주 마진숏 실전 (검증완료, 증거금상한100·2배, 2026-07-11)
     "hybrid_trader":         ROOT / "scripts" / "hybrid_trader.py",    # 하이브리드 약세현금/강세 BTC50%+알트Top3 (강세 forward 검증·모의)
     "crossex_logger":        ROOT / "scripts" / "crossex_logger.py",   # 교차거래소 선행신호 로거 (순수로깅·매매0, 격리)
     "volume_radar":          ROOT / "scripts" / "volume_radar.py",     # 거래대금 급증 레이더 (순수로깅·매매0, 격리)
