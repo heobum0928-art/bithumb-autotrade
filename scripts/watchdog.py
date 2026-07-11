@@ -46,7 +46,10 @@ BOTS = {
     "ml_trader":             ROOT / "scripts" / "ml_trader.py",        # #31 ML 점화 모의매매 (게이트 검증)
     "core_trader":           ROOT / "scripts" / "core_trader.py",      # 코어 BTC 사이클타이밍 (검증엔진·모의 추적)
     "core_leveraged":        ROOT / "scripts" / "core_leveraged.py",   # 코어+2배 레버리지 (바이낸스 선물 모의추적, 2026-07-09)
-    "blowoff_short_paper":   ROOT / "scripts" / "blowoff_short_paper.py",  # 급등되돌림 숏 페이퍼 (바이낸스, REAL_MARGINAL forward검증, 2026-07-10)
+    # "blowoff_short_paper" 은퇴 (2026-07-12): ①선물(fapi) 가격만 조회해 선물 미상장 코인(PYR 등)을
+    # 추적 못 하는 버그 — PYR 모의숏이 실제 -28% 하락(숏 +17%)인데 "가격 무변동, -0.2%"로 오기록됨.
+    # ②역할 종료: 검증된 실전봇(margin_short_trader, 현물API 사용·정상)이 대체.
+    # "blowoff_short_paper":   ROOT / "scripts" / "blowoff_short_paper.py",
     "margin_short_trader":   ROOT / "scripts" / "margin_short_trader.py",  # ★거래량폭발 급등주 마진숏 실전 (검증완료, 증거금상한100·2배, 2026-07-11)
     "rsi_extreme_short_paper": ROOT / "scripts" / "rsi_extreme_short_paper.py",  # RSI>92+거래량3배 숏 (MARGINAL, forward 모의검증, 2026-07-12)
     "hybrid_trader":         ROOT / "scripts" / "hybrid_trader.py",    # 하이브리드 약세현금/강세 BTC50%+알트Top3 (강세 forward 검증·모의)
