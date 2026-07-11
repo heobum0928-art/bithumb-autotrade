@@ -51,7 +51,11 @@ POLL_SEC = 300
 PUMP_PCT = 20.0            # 2h(24봉) 상승률
 LOOKBACK = 24
 VOL_MULT = 10.0           # 거래량 폭발 배수 (백테스트 안전셀)
-HOLD_H = 8
+# 2026-07-11 업그레이드: 오토리서치 검증 — 8h무손절(2xEV+7.9%,청산3%) → 48h+40%스탑(2xEV+19.4%,청산0%).
+# 되돌림이 며칠에 걸쳐 오므로 홀딩 연장이 최대 레버. 40%스탑은 2배 청산선(+50%) 안쪽이라 청산위험을
+# 공짜로 0으로 제거(꼬리 삭제). train/test 부호일관·상위3제거·최고주제거 생존, 랜덤숏 벤치 -0.8% 대비 알파.
+HOLD_H = 48
+STOP_PCT = 40.0           # 진입가 대비 +40% 상승 시 손절(2배 청산선 +50% 안쪽)
 COOLDOWN_H = 6
 MARGIN_PER_TRADE = 100.0  # 증거금(상한과 동일). 실제 사용은 min(잔고,상한)
 
@@ -137,6 +141,12 @@ def main():
                 if not vok:
                     cooldown[sym] = now + COOLDOWN_H*3600
                     continue
+                # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 전체상한 초과 방지)
+                open_margin = sum(p["margin"] for p in positions.values())
+                gcap = load_config().get("global_cap_usdt", 0)
+                if open_margin + MARGIN_PER_TRADE > gcap:
+                    log.info(f"진입 보류 {sym}: 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>전체상한 {gcap} (기존 포지션 청산 대기)")
+                    continue
                 # 진입
                 margin = min(MARGIN_PER_TRADE, get_margin_usdt())
                 res = guard.open_short(coin, margin)
@@ -151,12 +161,14 @@ def main():
                 else:
                     log.info(f"진입 dry/실패 {sym}: {res}")
 
-            # 2) 만기 청산
+            # 2) 청산: 40% 스탑(가격이 진입가+40% 상승 = 숏 손실) OR 48h 만기
             for sym in list(positions.keys()):
                 pos = positions[sym]
-                if now < pos["exit_ts"]:
-                    continue
                 px = prices.get(sym, pos["entry_price"])
+                stop_hit = px >= pos["entry_price"] * (1 + STOP_PCT/100)
+                if not stop_hit and now < pos["exit_ts"]:
+                    continue
+                reason = f"스탑+{STOP_PCT:.0f}%" if stop_hit else f"{HOLD_H}h만기"
                 cres = guard.close_short(pos["coin"])
                 pnl_pct = (1 - px/pos["entry_price"])*100
                 pnl_usdt = pos["margin"] * load_config().get("leverage",2) * (pnl_pct/100)
@@ -164,9 +176,9 @@ def main():
                 log_trade(dict(entry_time=pos["entry_iso"], exit_time=datetime.now(KST).isoformat(), symbol=sym,
                                pump_2h=pos["pump"], vol_mult=pos["vr"], entry_price=pos["entry_price"], exit_price=px,
                                margin_usdt=pos["margin"], pnl_pct=round(pnl_pct,2), pnl_usdt=round(pnl_usdt,2),
-                               live=pos["live"], reason=f"{HOLD_H}h만기"))
-                log.warning(f"★마진숏 청산 {sym} @{px:g} pnl={pnl_pct:+.2f}%({pnl_usdt:+.2f}USDT) → {cres.get('live') and '실청산' or cres}")
-                try: notify.send(f"📈 마진숏 청산 {sym} pnl={pnl_pct:+.1f}% ({pnl_usdt:+.1f}USDT)")
+                               live=pos["live"], reason=reason))
+                log.warning(f"★마진숏 청산 {sym} @{px:g} {reason} pnl={pnl_pct:+.2f}%({pnl_usdt:+.2f}USDT) → {cres.get('live') and '실청산' or cres}")
+                try: notify.send(f"📈 마진숏 청산 {sym} {reason} pnl={pnl_pct:+.1f}% ({pnl_usdt:+.1f}USDT)")
                 except Exception: pass
                 del positions[sym]
 
