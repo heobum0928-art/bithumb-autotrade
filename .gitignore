@@ -26,3 +26,5 @@ data/margin_short_buf.json
 data/margin_short_trades.csv
 data/_borrowable_coins.txt
 data/_borrowable_all.txt
+data/rsi_short_pos.json
+data/rsi_short_trades.csv
