@@ -48,15 +48,19 @@ log = logging.getLogger(__name__)
 FAPI = "https://fapi.binance.com"; BASE = "https://api.binance.com"
 ENGINE = "mshort"
 POLL_SEC = 300
-PUMP_PCT = 20.0            # 2h(24봉) 상승률
-LOOKBACK = 24
-VOL_MULT = 10.0           # 거래량 폭발 배수 (백테스트 안전셀)
-# 2026-07-11 업그레이드: 오토리서치 검증 — 8h무손절(2xEV+7.9%,청산3%) → 48h+40%스탑(2xEV+19.4%,청산0%).
-# 되돌림이 며칠에 걸쳐 오므로 홀딩 연장이 최대 레버. 40%스탑은 2배 청산선(+50%) 안쪽이라 청산위험을
-# 공짜로 0으로 제거(꼬리 삭제). train/test 부호일관·상위3제거·최고주제거 생존, 랜덤숏 벤치 -0.8% 대비 알파.
+
+# ★ 2026-07-11 진입조건 전면교체 — 사용자 패턴이 봇 조건보다 우월함이 데이터로 확인됨.
+# 기존 봇: 2h+20% & 거래량10배 → 3.2건/주, TE +16.6%(t1.6), 승76%, 청산2%
+# 사용자식: 24h +40% (거래량 무관) → 8.1건/주, TE +17.6%(t2.3), 승72%, 청산1%  ★채택
+#   신호 2.5배 + 통계 더 확실(t1.6→2.3) + 청산 더 낮음. RSI 필터 추가는 오히려 악화(t2.2)라 미적용.
+# 근거: 사용자가 감으로 이긴 SKL(24h+55%)·PYR(24h+63%)이 기존 봇 조건엔 안 걸렸음 — 조건 자체가 틀렸던 것.
+# "며칠에 걸쳐 누적 급등"(DEXE: 일봉 MA20이격+47%)도 24h 기준이라야 포착됨.
+PUMP_PCT = 40.0            # 24시간 상승률 문턱
+LOOKBACK = 288             # 24h = 5분 x 288
+VOL_MULT = 0.0            # 거래량 필터 미사용 (검증 결과 불필요 — "많이 올랐다"는 사실 하나면 충분)
 HOLD_H = 48
 STOP_PCT = 40.0           # 진입가 대비 +40% 상승 시 손절(2배 청산선 +50% 안쪽)
-COOLDOWN_H = 6
+COOLDOWN_H = 24           # 24h급등 기준이라 쿨다운도 확대(같은 코인 반복진입 방지)
 MARGIN_PER_TRADE = 100.0  # 증거금(상한과 동일). 실제 사용은 min(잔고,상한)
 
 BUF_PATH = ROOT / "data" / "margin_short_buf.json"
@@ -111,25 +115,21 @@ def _save(p, o):
     tmp = Path(p).with_suffix(".tmp"); tmp.write_text(json.dumps(o, ensure_ascii=False), encoding="utf-8"); tmp.replace(p)
 
 
-def all_prices():
-    """현물+선물 통합 현재가 (마진은 현물가 기준)."""
-    r = requests.get(f"{BASE}/api/v3/ticker/price", timeout=10)
+def all_tickers():
+    """전 심볼의 현재가 + 24시간 변동률 한 번에 (24h 급등 판정용).
+    ★ 가격버퍼로 24h를 재려면 288샘플=24시간 대기 필요 → 바이낸스가 직접 주는 24h 변동률 사용."""
+    r = requests.get(f"{BASE}/api/v3/ticker/24hr", timeout=15)
     r.raise_for_status()
-    return {x["symbol"]: float(x["price"]) for x in r.json()}
+    out = {}
+    for x in r.json():
+        try:
+            out[x["symbol"]] = (float(x["lastPrice"]), float(x["priceChangePercent"]), float(x["quoteVolume"]))
+        except Exception:
+            pass
+    return out
 
 
-def volume_ok(sym):
-    """급등 후보의 거래량 폭발 확인 (5m klines 1회)."""
-    try:
-        r = requests.get(f"{BASE}/api/v3/klines", params={"symbol": sym, "interval": "5m", "limit": 25}, timeout=8)
-        if r.status_code != 200: return False, 0.0
-        vl = [float(x[7]) for x in r.json()]
-        if len(vl) < 21: return False, 0.0
-        avg = sum(vl[-21:-1]) / 20
-        if avg <= 0: return False, 0.0
-        return vl[-1] / avg >= VOL_MULT, vl[-1] / avg
-    except Exception:
-        return False, 0.0
+MIN_QUOTE_VOL = 2_000_000   # 24h 거래대금 최소 200만 USDT (유동성 — 체결·대출 가능성 확보)
 
 
 def log_trade(row):
@@ -143,13 +143,13 @@ def log_trade(row):
 
 def main():
     global UNIVERSE
-    buf = _load(BUF_PATH, {}); positions = _load(POS_PATH, {}); cooldown = {}
+    positions = _load(POS_PATH, {}); cooldown = {}
     last_refresh = 0.0
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
-    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 거래량{VOL_MULT:.0f}배+2h+{PUMP_PCT:.0f}%→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
+    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 24h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
              f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 {get_margin_usdt():.1f}")
-    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 증거금상한 {ls['global_cap_usdt']}USDT")
+    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 24h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인")
     except Exception: pass
 
     while True:
@@ -160,33 +160,27 @@ def main():
                 last_refresh = now
                 fresh = refresh_borrowable()
                 if fresh: UNIVERSE = fresh
-            prices = all_prices()
+            tick = all_tickers()
             guard = MarginGuard(ENGINE)
 
-            # 1) 신호 탐지
+            # 1) 신호 탐지 — 24h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
             for coin in UNIVERSE:
                 sym = f"{coin}USDT"
-                px = prices.get(sym)
-                if not px or px <= 0: continue
-                b = buf.setdefault(sym, [])
-                b.append([now, px])
-                if len(b) > 30: del b[:len(b)-30]
-                if sym in positions or cooldown.get(sym, 0) > now or len(b) < LOOKBACK:
+                t = tick.get(sym)
+                if not t: continue
+                px, chg24, qvol = t
+                if px <= 0 or qvol < MIN_QUOTE_VOL: continue
+                if sym in positions or cooldown.get(sym, 0) > now:
                     continue
-                past = b[-LOOKBACK][1]
-                if past <= 0: continue
-                ret2h = (px/past - 1) * 100
-                if ret2h < PUMP_PCT:
+                if chg24 < PUMP_PCT:
                     continue
-                vok, vr = volume_ok(sym)
-                if not vok:
-                    cooldown[sym] = now + COOLDOWN_H*3600
-                    continue
+                ret2h = chg24   # 기록용(24h 상승률)
+                vr = 0.0
                 # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 전체상한 초과 방지)
                 open_margin = sum(p["margin"] for p in positions.values())
                 gcap = load_config().get("global_cap_usdt", 0)
                 if open_margin + MARGIN_PER_TRADE > gcap:
-                    log.info(f"진입 보류 {sym}: 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>전체상한 {gcap} (기존 포지션 청산 대기)")
+                    log.info(f"진입 보류 {sym}(24h+{chg24:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>전체상한 {gcap}")
                     continue
                 # 진입
                 margin = min(MARGIN_PER_TRADE, get_margin_usdt())
@@ -196,8 +190,8 @@ def main():
                     positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": res.get("price", px),
                                       "qty": res["qty"], "margin": margin, "pump": round(ret2h,1), "vr": round(vr,1),
                                       "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
-                    log.warning(f"★실전 마진숏 진입 {sym} 2h+{ret2h:.0f}% 거래량{vr:.0f}배 증거금{margin:.0f} → {res['qty']}개")
-                    try: notify.send(f"📉 마진숏 진입 {sym} 2h+{ret2h:.0f}% 거래량{vr:.0f}배 (증거금{margin:.0f}USDT)")
+                    log.warning(f"★실전 마진숏 진입 {sym} 24h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
+                    try: notify.send(f"📉 마진숏 진입 {sym} 24h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
                     except Exception: pass
                 else:
                     log.info(f"진입 dry/실패 {sym}: {res}")
@@ -205,7 +199,8 @@ def main():
             # 2) 청산: 40% 스탑(가격이 진입가+40% 상승 = 숏 손실) OR 48h 만기
             for sym in list(positions.keys()):
                 pos = positions[sym]
-                px = prices.get(sym, pos["entry_price"])
+                t = tick.get(sym)
+                px = t[0] if t else pos["entry_price"]
                 stop_hit = px >= pos["entry_price"] * (1 + STOP_PCT/100)
                 if not stop_hit and now < pos["exit_ts"]:
                     continue
@@ -223,7 +218,7 @@ def main():
                 except Exception: pass
                 del positions[sym]
 
-            _save(BUF_PATH, buf); _save(POS_PATH, positions)
+            _save(POS_PATH, positions)
         except Exception as e:
             log.error(f"루프오류: {e}")
         time.sleep(POLL_SEC)
