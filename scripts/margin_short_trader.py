@@ -63,11 +63,43 @@ BUF_PATH = ROOT / "data" / "margin_short_buf.json"
 POS_PATH = ROOT / "data" / "margin_short_pos.json"
 TRADES_PATH = ROOT / "data" / "margin_short_trades.csv"
 
-# 유니버스: 마진 숏 가능 코인 목록 (수집시 저장해둔 spot+perp klines 기준)
-UNIVERSE = sorted(set(
+# 유니버스: klines 보유 코인 ∩ 실제 대출가능 코인
+# ★ 2026-07-11 중대발견: 314개 중 실제 빌릴 수 있는 건 174개(55%)뿐. 급등 소형알트(T/PYR/SKL)는
+# 대출 재고가 없어 주문 거부(-3045). 백테스트는 314개 전부 숏 가능하다고 가정했었음.
+# 재검증 결과 다행히 엣지는 대출가능 쪽이 오히려 더 큼(TE +26.5% t2.9 vs 대출불가 +5.8% t0.5).
+# → 대출가능 코인만 감시. 목록은 수시로 바뀌므로 REFRESH_H마다 갱신.
+BORROWABLE_PATH = ROOT / "data" / "_borrowable_coins.txt"
+BORROWABLE_REFRESH_H = 6
+
+_KLINE_COINS = sorted(set(
     [os.path.basename(f).replace("USDT_5m.json", "") for f in (ROOT / "data" / "binance_klines").glob("*_5m.json")] +
     [os.path.basename(f).replace("USDT_5m.json", "") for f in (ROOT / "data" / "binance_spot_klines").glob("*_5m.json")]
 ))
+
+def refresh_borrowable():
+    """실제 대출 가능한 코인만 추림 (maxBorrowable > 0). 실패 시 기존 파일 폴백."""
+    from bithumb.margin_guard import _signed
+    ok = []
+    for coin in _KLINE_COINS:
+        try:
+            r = _signed("GET", "/sapi/v1/margin/maxBorrowable", {"asset": coin})
+            if r.status_code == 200 and float(r.json().get("amount", 0)) > 0:
+                ok.append(coin)
+        except Exception:
+            pass
+        time.sleep(0.12)
+    if ok:
+        BORROWABLE_PATH.write_text("\n".join(ok), encoding="utf-8")
+        log.info(f"대출가능 유니버스 갱신: {len(ok)}/{len(_KLINE_COINS)}개")
+    return ok
+
+def load_borrowable():
+    try:
+        return [c for c in BORROWABLE_PATH.read_text(encoding="utf-8").split() if c]
+    except Exception:
+        return []
+
+UNIVERSE = load_borrowable() or _KLINE_COINS
 
 
 def _load(p, d):
@@ -108,17 +140,24 @@ def log_trade(row):
 
 
 def main():
+    global UNIVERSE
     buf = _load(BUF_PATH, {}); positions = _load(POS_PATH, {}); cooldown = {}
+    last_refresh = 0.0
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
-    log.info(f"마진숏 트레이더 시작 [{mode}] — {len(UNIVERSE)}코인, 거래량{VOL_MULT:.0f}배+2h+{PUMP_PCT:.0f}%→{HOLD_H}h숏 "
+    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 거래량{VOL_MULT:.0f}배+2h+{PUMP_PCT:.0f}%→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
              f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 {get_margin_usdt():.1f}")
-    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 거래량폭발 급등주 숏, 증거금상한 {ls['global_cap_usdt']}USDT")
+    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 증거금상한 {ls['global_cap_usdt']}USDT")
     except Exception: pass
 
     while True:
         try:
             now = time.time()
+            # 대출가능 유니버스 주기 갱신 (재고가 수시로 바뀜 → 못 빌리는 코인에 주문 던지는 것 방지)
+            if now - last_refresh >= BORROWABLE_REFRESH_H * 3600:
+                last_refresh = now
+                fresh = refresh_borrowable()
+                if fresh: UNIVERSE = fresh
             prices = all_prices()
             guard = MarginGuard(ENGINE)
 
