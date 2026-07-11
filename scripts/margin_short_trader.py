@@ -63,34 +63,36 @@ BUF_PATH = ROOT / "data" / "margin_short_buf.json"
 POS_PATH = ROOT / "data" / "margin_short_pos.json"
 TRADES_PATH = ROOT / "data" / "margin_short_trades.csv"
 
-# 유니버스: klines 보유 코인 ∩ 실제 대출가능 코인
-# ★ 2026-07-11 중대발견: 314개 중 실제 빌릴 수 있는 건 174개(55%)뿐. 급등 소형알트(T/PYR/SKL)는
-# 대출 재고가 없어 주문 거부(-3045). 백테스트는 314개 전부 숏 가능하다고 가정했었음.
-# 재검증 결과 다행히 엣지는 대출가능 쪽이 오히려 더 큼(TE +26.5% t2.9 vs 대출불가 +5.8% t0.5).
-# → 대출가능 코인만 감시. 목록은 수시로 바뀌므로 REFRESH_H마다 갱신.
-BORROWABLE_PATH = ROOT / "data" / "_borrowable_coins.txt"
+# 유니버스: 바이낸스 마진 대출가능 코인 전체 (2026-07-11 확장 — 빗썸 교집합 제한 제거)
+# ★ 발견1: 백테스트 314개 중 실제 빌릴 수 있는 건 절반뿐(급등 소형알트는 대출재고 없어 -3045 거부).
+#   재검증: 엣지는 오히려 대출가능 쪽이 큼 → 대출가능만 감시.
+# ★ 발견2: 빗썸 교집합으로 좁힐 이유 없음(거래는 바이낸스에서만 함). 제한 풀면 177→210개,
+#   신호 1.8→3.2건/주로 78%↑, 승률76%·청산2%(오히려 개선). 단 신규분 TEST 수익은 약해
+#   전체 TE +31%→+17%로 희석 — 기대치는 낮추되 표본이 2배라 실전검증이 빨라지는 게 더 중요.
+BORROWABLE_PATH = ROOT / "data" / "_borrowable_all.txt"
 BORROWABLE_REFRESH_H = 6
 
-_KLINE_COINS = sorted(set(
-    [os.path.basename(f).replace("USDT_5m.json", "") for f in (ROOT / "data" / "binance_klines").glob("*_5m.json")] +
-    [os.path.basename(f).replace("USDT_5m.json", "") for f in (ROOT / "data" / "binance_spot_klines").glob("*_5m.json")]
-))
-
 def refresh_borrowable():
-    """실제 대출 가능한 코인만 추림 (maxBorrowable > 0). 실패 시 기존 파일 폴백."""
+    """바이낸스 마진 숏가능 + 실제 대출재고 있는 코인 전체 (klines 보유 여부 무관)."""
     from bithumb.margin_guard import _signed
+    try:
+        pairs = _signed("GET", "/sapi/v1/margin/allPairs").json()
+        cands = sorted(set(p["symbol"].replace("USDT", "") for p in pairs
+                           if p.get("quote") == "USDT" and p.get("isSellAllowed") and p.get("isMarginTrade")))
+    except Exception as e:
+        log.warning(f"마진쌍 조회 실패: {e}"); return []
     ok = []
-    for coin in _KLINE_COINS:
+    for coin in cands:
         try:
             r = _signed("GET", "/sapi/v1/margin/maxBorrowable", {"asset": coin})
             if r.status_code == 200 and float(r.json().get("amount", 0)) > 0:
                 ok.append(coin)
         except Exception:
             pass
-        time.sleep(0.12)
+        time.sleep(0.1)
     if ok:
         BORROWABLE_PATH.write_text("\n".join(ok), encoding="utf-8")
-        log.info(f"대출가능 유니버스 갱신: {len(ok)}/{len(_KLINE_COINS)}개")
+        log.info(f"대출가능 유니버스 갱신: {len(ok)}/{len(cands)}개")
     return ok
 
 def load_borrowable():
@@ -99,7 +101,7 @@ def load_borrowable():
     except Exception:
         return []
 
-UNIVERSE = load_borrowable() or _KLINE_COINS
+UNIVERSE = load_borrowable()   # 비면 main()의 첫 refresh가 채움
 
 
 def _load(p, d):
