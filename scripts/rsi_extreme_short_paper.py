@@ -1,21 +1,22 @@
 """
-RSI 극단 과매수 숏 페이퍼 트레이더 (rsi_extreme_short_paper) — 순수 모의, 실주문 0.
+RSI 극단 과매수 숏 트레이더 (rsi_extreme_short) — 소액 실전 (2026-07-13 전환).
 
 검증(2026-07-12, 기술지표 오토리서치 5각도 중 유일 생존):
   규칙: 5분봉 RSI(14) > 92 AND 해당봉 거래대금 > 직전20봉 평균의 3배
-        AND 24h 상승률 < 40% (실전봇과 겹치지 않게)
+        AND 24h 상승률 < 40% (마진숏봇과 겹치지 않게)
         → 다음봉 시가에 SHORT, 4시간 홀딩
   적대검증(독립 재구현): TRAIN EV +1.28% → TEST +3.70%(t_day 4.12), OOS가 더 강함.
   2배 청산 0/202건(최대역행 43%), 무작위숏 대조군은 양쪽 마이너스(=베타 아님, 진짜 알파),
   상위3코인 제거 +2.36%, 최고주 제거 +2.87%, 분할점 5개 전부 유지.
-  ★실전봇(24h+40% 숏)과 신호 겹침 9.9%뿐, 손익상관 ~0 → 완전히 독립적인 자리.
-  판정: MARGINAL (통계는 강하나 표본 202건) → 실전 전 forward 모의로 표본 축적.
+  ★마진숏봇(6h+40% 숏)과 신호 겹침 9.9%뿐, 손익상관 ~0 → 완전히 독립적인 자리.
+  판정: MARGINAL (통계는 강하나 표본 202건, forward모의 XAUT·STORJ 2건 진행중이던 상태) →
+  사용자 판단으로 소액(증거금상한 30USDT) 실전 전환. 계속 MARGINAL임을 인지하고 운용할 것.
 
 주의: 다른 정통 지표(RSI30/70, MACD, 볼린저, 스토캐스틱)는 106조합 전멸.
       거래량 미시구조·1분봉 추론도 전부 사망. 이것만 살아남음.
 
-★ 순수 모의: 주문 API 미호출. 포트 47252.
-포지션 data/rsi_short_pos.json | 기록 data/rsi_short_trades.csv | 로그 logs/rsi_extreme_short.log
+★ margin_guard(engine=rsishort) OFF면 자동 dry. 실전은 data/margin_live_config.json arm 필요.
+   포트 47252. 포지션 data/rsi_short_pos.json | 기록 data/rsi_short_trades.csv | 로그 logs/rsi_extreme_short.log
 """
 import sys, os, atexit, time, json, csv, socket, logging, statistics
 from datetime import datetime, timezone, timedelta
@@ -39,6 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import requests
 from bithumb import notify
+from bithumb.margin_guard import MarginGuard, live_status, get_margin_usdt, load_config
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [RSISHORT] %(message)s",
@@ -46,14 +48,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [RSISHORT] %(message
 log = logging.getLogger(__name__)
 
 BASE = "https://api.binance.com"
+ENGINE = "rsishort"
 POLL_SEC = 300
 RSI_MIN = 92.0            # 5분봉 RSI(14) 문턱
 VOL_MULT = 3.0            # 신호봉 거래대금 / 직전20봉 평균
-MAX_24H_CHG = 40.0        # 24h 상승률 이 미만만 (실전봇 영역과 분리)
+MAX_24H_CHG = 40.0        # 24h 상승률 이 미만만 (마진숏봇 영역과 분리)
 HOLD_H = 4
 COOLDOWN_H = 8
 COST_PCT = 0.20 + 0.12/24*HOLD_H   # 왕복비용 + 4h 대출이자
 MIN_QUOTE_VOL_5M = 10_000          # 유동성: 5분봉 거래대금 1만 USDT+ (검증서 이 필터가 오히려 개선)
+MARGIN_PER_TRADE = 30.0            # ★ MARGINAL 판정이라 소액 시작 — 증거금상한과 동일(동시 1건)
 
 BORROW_PATH = ROOT / "data" / "_borrowable_all.txt"
 POS_PATH = ROOT / "data" / "rsi_short_pos.json"
@@ -123,8 +127,10 @@ def log_trade(row):
 def main():
     positions = _load(POS_PATH, {}); cooldown = {}
     uni = universe()
-    log.info(f"RSI극단 숏 페이퍼 시작 — 대출가능 {len(uni)}코인, RSI>{RSI_MIN:.0f} & 거래량{VOL_MULT:.0f}배 & 24h<{MAX_24H_CHG:.0f}% → {HOLD_H}h숏 | 순수모의(주문0)")
-    try: notify.send(f"📉 RSI극단 숏 페이퍼 시작 — RSI>{RSI_MIN:.0f}+거래량{VOL_MULT:.0f}배 숏, 모의(주문0)")
+    ls = live_status()
+    mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
+    log.info(f"RSI극단 숏 시작 [{mode}] — 대출가능 {len(uni)}코인, RSI>{RSI_MIN:.0f} & 거래량{VOL_MULT:.0f}배 & 24h<{MAX_24H_CHG:.0f}% → {HOLD_H}h숏 | 증거금상한 {MARGIN_PER_TRADE:.0f}USDT")
+    try: notify.send(f"📉 RSI극단 숏 시작 [{mode}] — RSI>{RSI_MIN:.0f}+거래량{VOL_MULT:.0f}배 숏 (MARGINAL 판정, 소액)")
     except Exception: pass
 
     while True:
@@ -140,22 +146,33 @@ def main():
                 pass
 
             # 1) 신호 탐지
+            guard = MarginGuard(ENGINE)
             for coin in uni:
                 sym = f"{coin}USDT"
                 if sym in positions or cooldown.get(sym, 0) > now:
                     continue
                 c24 = chg24.get(sym, 0)
-                if c24 >= MAX_24H_CHG:   # 실전봇이 잡는 영역 → 스킵(중복 방지)
+                if c24 >= MAX_24H_CHG:   # 마진숏봇이 잡는 영역 → 스킵(중복 방지)
                     continue
                 hit, rsi, vr, px, _ = check_signal(sym)
                 if not hit or px <= 0:
                     continue
-                positions[sym] = {"entry_ts": now, "entry_price": px, "rsi": round(rsi,1), "vr": round(vr,1),
-                                  "chg24": round(c24,1), "exit_ts": now + HOLD_H*3600,
-                                  "min_p": px, "max_p": px, "entry_iso": datetime.now(KST).isoformat()}
+                # 동시노출 상한: 실전 포지션 이미 있으면 신규 실전진입 보류(동시 1건 — 증거금상한이 곧 1건 규모)
+                open_margin = sum(p["margin"] for p in positions.values() if p.get("live"))
+                if open_margin > 0:
+                    log.info(f"진입 보류 {sym}(RSI{rsi:.0f}): 이미 실전포지션 {open_margin:.0f}USDT 열려있음(상한 {MARGIN_PER_TRADE:.0f})")
+                    continue
+                margin = min(MARGIN_PER_TRADE, get_margin_usdt())
+                res = guard.open_short(coin, margin)
                 cooldown[sym] = now + COOLDOWN_H*3600
-                log.warning(f"숏 진입(모의) {sym} @{px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
-                try: notify.send(f"📉 RSI극단 숏 진입(모의) {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{px:g}")
+                live = bool(res.get("live"))
+                entry_px = res.get("price", px) if live else px
+                positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": entry_px, "rsi": round(rsi,1), "vr": round(vr,1),
+                                  "chg24": round(c24,1), "exit_ts": now + HOLD_H*3600, "margin": margin, "live": live,
+                                  "min_p": entry_px, "max_p": entry_px, "entry_iso": datetime.now(KST).isoformat()}
+                tag = "★실전" if live else "(모의)"
+                log.warning(f"숏 진입{tag} {sym} @{entry_px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
+                try: notify.send(f"📉 RSI극단 숏 진입{tag} {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
                 except Exception: pass
 
             # 2) 추적 + 만기 청산
@@ -173,15 +190,31 @@ def main():
                         continue
                     exit_px = px if (px and px > 0) else p["entry_price"]
                     entry = p["entry_price"]
+                    is_live = bool(p.get("live"))   # 구형(실전전환 전) 포지션은 live 키 없음 → 모의로 취급(안전)
+                    if is_live:
+                        cres = guard.close_short(p.get("coin", sym[:-4]))
+                        # ★margin_short_trader와 동일 수정: 청산 실패 시 로컬에서 지우지 않고 재시도+알림
+                        if not cres.get("live"):
+                            fails = p.get("close_fails", 0) + 1
+                            p["close_fails"] = fails
+                            log.error(f"★청산 실패(포지션 유지, 재시도예정) {sym} → {cres} (연속{fails}회)")
+                            if fails in (1, 3) or fails % 10 == 0:
+                                try: notify.send(f"🚨 RSI극단숏 청산 실패 {sym} → {cres} (연속{fails}회) — 실거래소 포지션 열려있음! 확인 필요")
+                                except Exception: pass
+                            continue
                     pnl = (1 - exit_px/entry)*100 - COST_PCT
+                    pnl_usdt = p["margin"] * load_config().get("leverage",2) * (pnl/100) if is_live else 0.0
+                    if is_live: guard.record_realized(pnl_usdt)
                     mfe = (1 - p["min_p"]/entry)*100
                     mae = (1 - p["max_p"]/entry)*100
                     log_trade(dict(entry_time=p["entry_iso"], exit_time=datetime.now(KST).isoformat(), symbol=sym,
                                    rsi=p["rsi"], vol_mult=p["vr"], chg24=p["chg24"],
                                    entry_price=entry, exit_price=exit_px, pnl_pct=round(pnl,2),
                                    mfe_pct=round(mfe,2), mae_pct=round(mae,2), reason=f"{HOLD_H}h만기"))
-                    log.warning(f"숏 청산(모의) {sym} @{exit_px:g} pnl={pnl:+.2f}% (최대유리+{mfe:.1f}% 최대역행{mae:+.1f}%)")
-                    try: notify.send(f"📈 RSI극단 숏 청산(모의) {sym} pnl={pnl:+.1f}%")
+                    tag = "★실전" if is_live else "(모의)"
+                    pnl_note = f" ({pnl_usdt:+.1f}USDT)" if is_live else ""
+                    log.warning(f"숏 청산{tag} {sym} @{exit_px:g} pnl={pnl:+.2f}%{pnl_note} (최대유리+{mfe:.1f}% 최대역행{mae:+.1f}%)")
+                    try: notify.send(f"📈 RSI극단 숏 청산{tag} {sym} pnl={pnl:+.1f}%{pnl_note}")
                     except Exception: pass
                     del positions[sym]
 
