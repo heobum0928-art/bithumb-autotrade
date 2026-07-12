@@ -87,7 +87,10 @@ def refresh_borrowable():
         cands = sorted(set(p["symbol"].replace("USDT", "") for p in pairs
                            if p.get("quote") == "USDT" and p.get("isSellAllowed") and p.get("isMarginTrade")))
     except Exception as e:
-        log.warning(f"마진쌍 조회 실패: {e}"); return []
+        log.warning(f"마진쌍 조회 실패: {e}")
+        try: notify.send(f"⚠️ 마진숏봇: 대출가능목록 갱신 실패 — {e} (IP차단·API권한 문제 의심)")
+        except Exception: pass
+        return []
     ok = []
     for coin in cands:
         try:
@@ -166,6 +169,7 @@ def main():
     global UNIVERSE
     positions = _load(POS_PATH, {}); cooldown = {}
     last_refresh = 0.0
+    api_fail = 0   # ★ 마진잔고 조회 연속실패 카운터 — IP차단 등으로 조용히 0 반환되는 걸 감지·알림
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
     log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 6h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
@@ -183,6 +187,21 @@ def main():
                 if fresh: UNIVERSE = fresh
             tick = all_tickers()
             guard = MarginGuard(ENGINE)
+
+            # ★ 마진잔고 헬스체크 — get_margin_usdt()가 API장애 시 조용히 0.0을 반환하는 문제(오늘 IP차단 사건)
+            #   감지: 연속 실패 시 알림, 복구 시 알림. (진짜 잔고 0은 300USDT 운용 규모상 사실상 안 일어남)
+            bal = get_margin_usdt()
+            if bal <= 0:
+                api_fail += 1
+                if api_fail in (2, 6) or api_fail % 12 == 0:
+                    log.error(f"마진잔고 0/조회실패 {api_fail}회 연속 — IP차단·API권한 문제 의심")
+                    try: notify.send(f"🚨 마진숏봇: 마진잔고 {api_fail}회 연속 0/조회실패 — IP차단 등 API 문제 의심, 확인 필요")
+                    except Exception: pass
+            else:
+                if api_fail >= 2:
+                    try: notify.send(f"✅ 마진숏봇: API 정상화 (잔고 {bal:.1f} USDT)")
+                    except Exception: pass
+                api_fail = 0
 
             # 1) 신호 탐지 — 6h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
             #    1차: 24h 변동률로 후보 추림(6h+40%면 24h도 최소 15%↑) → 2차: 후보만 5분봉으로 6h 정밀계산
@@ -232,6 +251,17 @@ def main():
                     continue
                 reason = f"스탑+{STOP_PCT:.0f}%" if stop_hit else f"{HOLD_H}h만기"
                 cres = guard.close_short(pos["coin"])
+                # ★ 실전 포지션은 실제 청산(live) 확인 전엔 로컬에서 지우지 않음.
+                #   과거 버그: 청산주문이 실패(API장애·IP차단 등)해도 무조건 positions에서 삭제해
+                #   실제 거래소엔 레버리지 숏이 그대로 열려있는데 봇은 더 이상 스탑/만기를 감시 안 함.
+                if pos["live"] and not cres.get("live"):
+                    fails = pos.get("close_fails", 0) + 1
+                    pos["close_fails"] = fails
+                    log.error(f"★청산 실패(포지션 유지, 다음루프 재시도) {sym} {reason} → {cres} (연속{fails}회)")
+                    if fails in (1, 3) or fails % 10 == 0:
+                        try: notify.send(f"🚨 마진숏 청산 실패 {sym} {reason} → {cres} (연속{fails}회) — 실거래소엔 포지션 열려있음! 확인 필요")
+                        except Exception: pass
+                    continue
                 pnl_pct = (1 - px/pos["entry_price"])*100
                 pnl_usdt = pos["margin"] * load_config().get("leverage",2) * (pnl_pct/100)
                 if pos["live"]: guard.record_realized(pnl_usdt)
