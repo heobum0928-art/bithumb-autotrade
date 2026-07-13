@@ -12,6 +12,8 @@ import sys
 import os
 import json
 import time
+import socket
+import atexit
 import sqlite3
 import logging
 import requests
@@ -19,12 +21,25 @@ import yaml
 from datetime import datetime, date
 from pathlib import Path
 
+# ★ 2026-07-13 추가: 다른 봇들과 달리 중복실행 방지 락이 없어서, watchdog 자동재시작과 수동재시작이
+#   겹쳐 tg_bot 프로세스가 2개 동시에 떠 있던 사고 발견(둘 다 offset=0부터 폴링 → 텔레그램 명령
+#   중복처리 위험, 예: /숏 명령이 실전 주문 두 번 나갈 수 있었음). 다른 봇들과 동일한 포트락 패턴 적용.
+_sock = None
+def _single():
+    global _sock
+    _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); _sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    try: _sock.bind(("127.0.0.1", 47253))
+    except OSError: print("[ERROR] tg_bot 이미 실행 중 (포트 47253)."); sys.exit(1)
+    atexit.register(_sock.close)
+_single()
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 KIS_PATH = Path("C:/code/kis-autotrade")
 sys.path.insert(0, str(KIS_PATH))
 
 import manual_trader
+import margin_manual_trader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -237,12 +252,17 @@ def cmd_manual_status() -> str:
     return manual_trader.status_text()
 
 
+def cmd_margin_manual_status() -> str:
+    return margin_manual_trader.status_text()
+
+
 COMMANDS = {
     "/status": cmd_status,
     "/trades": cmd_trades,
     "/pnl":    cmd_pnl,
     "/kis":    cmd_kis,
     "/재량":     cmd_manual_status,
+    "/재량숏":    cmd_margin_manual_status,
 }
 
 HELP_TEXT = (
@@ -251,9 +271,12 @@ HELP_TEXT = (
     "/trades — 오늘 거래 내역\n"
     "/pnl    — 최근 7일 손익\n"
     "/kis    — KIS 계좌 · 보유 종목\n"
-    "\n<b>[재량매매]</b> (기본 모의/dry — data/live_config.json armed_engines에 manual 추가 전까지 실전 안 나감)\n"
+    "\n<b>[재량매매-빗썸롱]</b> (기본 모의/dry — data/live_config.json armed_engines에 manual 추가 전까지 실전 안 나감)\n"
     "/사 코인명 — 재량 진입 (예: /사 MPLX). 변동성 실측 기반 손절·트레일 자동 설정, 익절상한 없음\n"
-    "/재량   — 열린 재량 포지션 상태"
+    "/재량   — 열린 재량 포지션 상태\n"
+    "\n<b>[재량매매-바이낸스숏]</b> (기본 모의/dry — data/margin_live_config.json armed_engines에 manualshort 추가 전까지 실전 안 나감)\n"
+    "/숏 코인명 — 재량 마진숏 진입 (예: /숏 PYR). 변동성 실측 기반 손절·트레일 자동 설정(방향반대), 증거금20USDT\n"
+    "/재량숏  — 열린 재량숏 포지션 상태"
 )
 
 MANUAL_CHECK_INTERVAL_SEC = 15
@@ -295,6 +318,12 @@ def main() -> None:
                 except Exception as e:
                     log.error(f"재량진입 오류: {e}")
                     reply = f"❌ 진입 처리 중 오류: {e}"
+            elif cmd == "/숏" and len(parts) >= 2:
+                try:
+                    reply = margin_manual_trader.enter(parts[1])
+                except Exception as e:
+                    log.error(f"재량숏진입 오류: {e}")
+                    reply = f"❌ 진입 처리 중 오류: {e}"
             elif cmd in COMMANDS:
                 reply = COMMANDS[cmd]()
             elif cmd in ("/help", "/start"):
@@ -313,6 +342,11 @@ def main() -> None:
                     send(m)
             except Exception as e:
                 log.error(f"재량매매 포지션 점검 오류: {e}")
+            try:
+                for m in margin_manual_trader.check_positions():
+                    send(m)
+            except Exception as e:
+                log.error(f"재량숏 포지션 점검 오류: {e}")
 
         time.sleep(1)
 
