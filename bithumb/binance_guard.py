@@ -82,10 +82,28 @@ def _save_state(s):
 
 
 # ── 서명 요청 헬퍼 ──
+_time_offset = {"ms": None, "checked_at": 0.0}
+
+def _synced_timestamp() -> int:
+    """바이낸스 서버시각과 동기화한 타임스탬프 (margin_guard.py와 동일 버그·수정 — 2026-07-13,
+    로컬PC 시계가 서버보다 ~1.3초 앞서 간헐적 -1021 오류로 조회가 조용히 실패하던 문제)."""
+    now = time.time()
+    if _time_offset["ms"] is None or now - _time_offset["checked_at"] > 300:
+        try:
+            r = requests.get(f"{FAPI}/fapi/v1/time", timeout=5)
+            server_ms = r.json()["serverTime"]
+            _time_offset["ms"] = server_ms - int(now * 1000)
+            _time_offset["checked_at"] = now
+        except Exception:
+            if _time_offset["ms"] is None:
+                _time_offset["ms"] = 0
+    return int(time.time() * 1000) + _time_offset["ms"]
+
+
 def _signed(method, path, params=None):
     key, sec = _keys()
     params = params or {}
-    params["timestamp"] = int(time.time() * 1000)
+    params["timestamp"] = _synced_timestamp()
     params["recvWindow"] = 5000
     qs = urlencode(params)
     sig = hmac.new(sec.encode(), qs.encode(), hashlib.sha256).hexdigest()

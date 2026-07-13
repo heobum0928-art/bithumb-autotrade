@@ -69,10 +69,30 @@ def _save_state(s):
         log.warning(f"state 저장 실패: {e}")
 
 
+_time_offset = {"ms": None, "checked_at": 0.0}
+
+def _synced_timestamp() -> int:
+    """바이낸스 서버시각과 동기화한 타임스탬프.
+    ★ 2026-07-13 버그: 로컬PC 시계가 서버보다 ~1.3초 앞서있어 간헐적으로 -1021(타임스탬프오류)
+    발생 → get_margin_usdt() 등이 조용히 실패해 0.0 반환(잔고 0으로 잘못 표시됨). 서버시각과의
+    오프셋을 5분마다 갱신해 보정."""
+    now = time.time()
+    if _time_offset["ms"] is None or now - _time_offset["checked_at"] > 300:
+        try:
+            r = requests.get(f"{BASE}/api/v3/time", timeout=5)
+            server_ms = r.json()["serverTime"]
+            _time_offset["ms"] = server_ms - int(now * 1000)
+            _time_offset["checked_at"] = now
+        except Exception:
+            if _time_offset["ms"] is None:
+                _time_offset["ms"] = 0
+    return int(time.time() * 1000) + _time_offset["ms"]
+
+
 def _signed(method, path, params=None):
     key, sec = _keys()
     params = params or {}
-    params["timestamp"] = int(time.time() * 1000); params["recvWindow"] = 5000
+    params["timestamp"] = _synced_timestamp(); params["recvWindow"] = 5000
     qs = urlencode(params)
     sig = hmac.new(sec.encode(), qs.encode(), hashlib.sha256).hexdigest()
     url = f"{BASE}{path}?{qs}&signature={sig}"

@@ -7,5 +7,19 @@
       "Bash(*)",
       "PowerShell(*)"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "A file was just modified in a crypto trading bot repo (real money, Binance cross-margin + Bithumb spot). Tool input: $ARGUMENTS\n\nFIRST: look at the file_path. If it is NOT a trading-critical Python file (i.e. not under scripts/ or bithumb/, or is a test/docs/data file), immediately reply exactly 'skip: not trading-critical' and stop — do not read or analyze it.\n\nIf it IS trading-critical (scripts/*.py or bithumb/*.py — execution guards, live traders, order sizing, position tracking): read the full current file, and review specifically for the bug patterns this project has actually hit before, not generic style issues:\n  - floating-point residue in order-quantity/price rounding (e.g. math.floor(qty/step)*step left undivided, causing exchange precision-rejection errors)\n  - silently swallowed exceptions that hide real failures (e.g. a balance/price fetch catching Exception and returning 0.0 with only a log.warning, no caller-visible alert)\n  - API request signing using raw local time.time() instead of exchange-server-synced time (clock drift causing intermittent auth/timestamp rejections)\n  - a position being deleted from local tracking before the exchange confirms the close/exit order actually succeeded (orphans a real position with no further monitoring)\n  - live vs paper/dry mode logic: a code path that should only fire on real fills sending an alert or mutating real state even in dry mode, or vice versa\n  - off-by-one or wrong-direction math in stop-loss / take-profit / liquidation price calculations, especially sign errors between long and short logic\n  - a filter or new condition added to an existing signal without the file/PR noting it was ablation-tested (this project has twice killed a working signal by adding an unvalidated filter)\n\nReport back only real findings tied to this specific diff/file, each with a concrete failure scenario (not hypothetical hand-waving). If nothing of concern, say so briefly. Keep the whole response under 200 words.",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
   }
 }
