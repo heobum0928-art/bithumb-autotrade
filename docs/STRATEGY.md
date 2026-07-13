@@ -784,3 +784,12 @@ mshort 재arm 완료.
   global_cap_usdt 100→130(mshort+rsishort 합산).
 - 실전전환 전 열려있던 구형 포지션(XAUT·STORJ, live키 없음)은 안전하게 모의로 계속 처리되도록 하위호환 처리.
 - **여전히 MARGINAL 표본(202건)임을 인지하고 운용할 것** — 마진숏(워크포워드 재검증 완료)보다 신뢰도 낮음.
+
+### 텔레그램 알림 — 실전 체결만 오도록 통일 (2026-07-13)
+사용자 요청: "매수하면 텔레그램 알림오고 손익도, 실전에서만 확인할 수 있게". 점검해보니 마진숏봇은 이미 실전만 알림 갔지만
+RSI극단숏·레버리지코어는 모의(paper) 거래도 알림이 갔음(태그로만 구분).
+- `rsi_extreme_short_paper.py`: 진입·청산 notify를 `if live/is_live:` 안으로 이동 — 모의는 로그만.
+- `core_leveraged.py`: 모의 리밸런싱(`rebalance()`)·모의 청산위험경보(`mark_to_market()`)는 notify 제거(로그만).
+  실전(`live_rebalance()`)은 `res.get("live")`일 때만 notify(스킵/dry는 로그만).
+- 봇 시작 알림(부팅 메시지)은 거래 알림이 아니라 상태알림이라 그대로 유지.
+- 청산(exit) 알림엔 이미 pnl%·USDT 손익이 포함되어 있음(마진숏은 원래부터, RSI숏도 실전전환 때 추가됨).

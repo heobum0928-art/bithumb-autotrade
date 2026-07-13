@@ -172,8 +172,9 @@ def main():
                                   "min_p": entry_px, "max_p": entry_px, "entry_iso": datetime.now(KST).isoformat()}
                 tag = "★실전" if live else "(모의)"
                 log.warning(f"숏 진입{tag} {sym} @{entry_px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
-                try: notify.send(f"📉 RSI극단 숏 진입{tag} {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
-                except Exception: pass
+                if live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
+                    try: notify.send(f"📉 RSI극단 숏 진입 {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
+                    except Exception: pass
 
             # 2) 추적 + 만기 청산
             if positions:
@@ -214,8 +215,9 @@ def main():
                     tag = "★실전" if is_live else "(모의)"
                     pnl_note = f" ({pnl_usdt:+.1f}USDT)" if is_live else ""
                     log.warning(f"숏 청산{tag} {sym} @{exit_px:g} pnl={pnl:+.2f}%{pnl_note} (최대유리+{mfe:.1f}% 최대역행{mae:+.1f}%)")
-                    try: notify.send(f"📈 RSI극단 숏 청산{tag} {sym} pnl={pnl:+.1f}%{pnl_note}")
-                    except Exception: pass
+                    if is_live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
+                        try: notify.send(f"📈 RSI극단 숏 청산 {sym} pnl={pnl:+.1f}%{pnl_note}")
+                        except Exception: pass
                     del positions[sym]
 
             _save(POS_PATH, positions)

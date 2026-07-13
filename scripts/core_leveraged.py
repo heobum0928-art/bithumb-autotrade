@@ -118,11 +118,10 @@ def mark_to_market(s, price):
     unrealized_from_entry = (price / s["entry_price"] - 1) if s["entry_price"] > 0 else 0
     loss_frac_of_margin = -unrealized_from_entry * LEVERAGE  # 양수면 손실중
     if loss_frac_of_margin >= LIQ_WARN_FRAC:
-        msg = (f"🚨 청산위험 경보 — 증거금의 {loss_frac_of_margin*100:.0f}% 손실 "
+        # ★ 모의(paper) 경로 전용 — 실제 포지션이 아니므로 텔레그램 알림은 생략, 로그만 (실전에서만 알림 원칙)
+        msg = (f"🚨 청산위험 경보(모의) — 증거금의 {loss_frac_of_margin*100:.0f}% 손실 "
                f"(진입가 {s['entry_price']:,.0f} → 현재 {price:,.0f}, {unrealized_from_entry*100:+.1f}%)")
         log.error(msg)
-        try: notify.send(f"[CORE-LEV] {msg}")
-        except Exception: pass
 
 
 def apply_funding(s, price):
@@ -155,13 +154,10 @@ def rebalance(s, target_frac, price, reason):
     s["margin_frac"] = target_frac
     s["entry_price"] = price if target_frac > 0 else 0.0
     s["last_price"] = price
-    log.warning(f"리밸런싱 → {reason}: 증거금비중 {target_frac*100:.0f}%(명목노출 {target_frac*LEVERAGE*100:.0f}%) "
+    log.warning(f"리밸런싱(모의) → {reason}: 증거금비중 {target_frac*100:.0f}%(명목노출 {target_frac*LEVERAGE*100:.0f}%) "
                 f"@{price:,.2f} 비용{-cost_krw:,.0f}원 | 모의자산 {s['equity']:,.0f}원 "
                 f"({(s['equity']/NOTIONAL_KRW-1)*100:+.1f}%)")
-    try:
-        notify.send(f"[CORE-LEV] {reason} — 증거금 {target_frac*100:.0f}%×{LEVERAGE:.0f}배 @{price:,.2f} | "
-                    f"모의자산 {s['equity']:,.0f}원({(s['equity']/NOTIONAL_KRW-1)*100:+.1f}%)")
-    except Exception: pass
+    # ★ 모의 리밸런싱은 실거래가 아니므로 텔레그램 알림 생략 (실전에서만 알림 원칙, 로그로만 확인)
     return True
 
 
@@ -179,10 +175,11 @@ def live_rebalance(guard, target_frac, price):
     res = guard.rebalance_long(target_notional)
     log.warning(f"[LIVE] 코어 목표명목 {target_notional:.1f} USDT"
                 f"(증거금 min(잔고{usdt:.0f},상한{cap})×{target_frac:.0%}×{LEVERAGE:.0f}배) → {res}")
-    try:
-        tag = "실주문" if res.get("live") else ("스킵" if res.get("skip") else f"dry({res.get('reason','')})")
-        notify.send(f"[CORE-LEV-LIVE] 목표 {target_frac:.0%}×{LEVERAGE:.0f}배 명목{target_notional:.0f}USDT @{price:,.0f} — {tag}")
-    except Exception: pass
+    # ★ 실제 주문이 나간 경우에만 알림(실전에서만 알림 원칙) — 스킵/dry는 로그만
+    if res.get("live"):
+        try:
+            notify.send(f"[CORE-LEV] ★실전 리밸런싱 {target_frac:.0%}×{LEVERAGE:.0f}배 명목{target_notional:.0f}USDT @{price:,.0f}")
+        except Exception: pass
 
 
 def main():
