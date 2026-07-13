@@ -817,3 +817,12 @@ manual_trader.py(빗썸 재량롱)와 동일 철학의 바이낸스 마진 재�
 전부 정상작동+수익 확인 후 사용자 승인으로 실전 전환. 증거금상한 20USDT(MARGINAL 취급, mshort/rsishort보다 소액).
 "뭘 숏칠지"는 사용자 판단(뉴스·차트), "손절폭·사이징"은 진입시점 실측변동성 기반 자동계산 — 검증 게이트 없는
 재량 도구(manual_trader와 동일 예외). 텔레그램 `/숏 코인명` 또는 대화 중 요청 시 실행.
+
+### ★ 긴급 버그 발견+수정 — 부동소수점 잔여로 실전 진입 거부 (2026-07-13)
+사용자 "SNX 해봐" → 실전 시도했으나 바이낸스가 `-51077 Precision is over the maximum defined` 로 거부.
+원인: `margin_guard._round_step()`이 `math.floor(qty/step)*step`만 하고 끝나서 `174.60000000000002` 같은
+부동소수점 잔여가 남음 — SNX처럼 step=0.1(정밀도 1자리)인 코인은 소수점 15자리째 잔여도 "정밀도 초과"로 거부당함.
+**mshort·rsishort·manualshort 전부 공유하는 `margin_guard.py` 공통함수라, 특정 코인/가격 조합에선 계속 조용히
+막혀있었을 수 있는 버그.** close_short()의 올림 계산도 동일 결함(round(qty,8)로는 못 막음, 자산 정밀도가 8자리보다 얕으면 무력).
+**수정**: `_round_step()`/`close_short()` 둘 다 step의 실제 소수자릿수로 `round()`하도록 통일(`_step_decimals()` 헬퍼 추가,
+올림용 `_round_step_up()` 신설). 수정 후 SNX 재시도 → 실전 체결 확인(orderId 1949124508, 175.4개, 대출확인 175.4005).

@@ -100,10 +100,29 @@ def _symbol_filters(sym):
         return 0.0, 5.0
 
 
+def _step_decimals(step) -> int:
+    """step(예: 0.1, 0.001)의 소수자릿수. 부동소수점 잔여 제거용 round() 자릿수 계산에 사용."""
+    if step <= 0: return 8
+    s = f"{step:.10f}".rstrip('0')
+    return len(s.split('.')[1]) if '.' in s else 0
+
+
 def _round_step(qty, step):
+    """step 배수로 내림 + step의 소수자릿수까지 반올림(부동소수점 잔여 제거).
+    ★ 2026-07-13 버그: floor(qty/step)*step만 하면 174.60000000000002 같은 잔여가 남아
+    바이낸스가 -51077(정밀도 초과)로 거부함. step 자체의 소수자릿수로 round()해서 제거."""
     if step <= 0: return qty
     import math
-    return math.floor(qty / step) * step
+    steps = math.floor(qty / step + 1e-9)   # +eps: qty/step이 부동소수점오차로 정수 바로 아래 떨어지는 것 방지
+    return round(steps * step, _step_decimals(step))
+
+
+def _round_step_up(qty, step):
+    """step 배수로 올림(청산 시 이자까지 넉넉히 갚기용) + 부동소수점 잔여 제거."""
+    if step <= 0: return qty
+    import math
+    steps = math.ceil(qty / step - 1e-9)
+    return round(steps * step, _step_decimals(step))
 
 
 def get_margin_usdt() -> float:
@@ -223,13 +242,12 @@ class MarginGuard:
         if borrowed <= 0:
             return {"error": "대출수량 0(청산할 숏 없음)"}
         step, _ = _symbol_filters(sym)
-        # 이자까지 갚으려면 살짝 넉넉히 — 스텝 올림
-        import math
-        qty = math.ceil(borrowed / step) * step if step > 0 else borrowed
+        # 이자까지 갚으려면 살짝 넉넉히 — 스텝 올림(부동소수점 잔여 제거 포함)
+        qty = _round_step_up(borrowed, step)
         try:
             r = _signed("POST", "/sapi/v1/margin/order",
                         {"symbol": sym, "side": "BUY", "type": "MARKET",
-                         "quantity": round(qty, 8), "sideEffectType": "AUTO_REPAY", "isIsolated": "FALSE"})
+                         "quantity": qty, "sideEffectType": "AUTO_REPAY", "isIsolated": "FALSE"})
             res = r.json()
             if r.status_code != 200:
                 log.error(f"[{self.engine}] ★숏청산 실패 {sym} {qty} → {res}")
