@@ -21,7 +21,7 @@ live_guard.py(빗썸)의 바이낸스 USDT 무기한선물 버전. 설계 원칙
     g = BinanceGuard("core_lev")
     g.rebalance_long(target_notional_usdt=X)  # BTCUSDT 롱을 목표명목까지 (통과 시 실주문, 아니면 dry)
 """
-import json, csv, time, hmac, hashlib, logging
+import json, csv, time, hmac, hashlib, logging, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -79,6 +79,31 @@ def _save_state(s):
         tmp = STATE.with_suffix(".tmp"); tmp.write_text(json.dumps(s, indent=2), encoding="utf-8"); tmp.replace(STATE)
     except Exception as e:
         log.warning(f"state 저장 실패: {e}")
+
+
+def _file_lock(path, timeout=5.0):
+    """margin_guard.py와 동일 수정(2026-07-13) — 다중엔진 동시 record_realized() 경쟁상태 방지."""
+    lock_path = str(path) + ".lock"
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return lock_path
+        except FileExistsError:
+            if time.time() > deadline:
+                try:
+                    if time.time() - os.path.getmtime(lock_path) > 10:
+                        os.remove(lock_path)
+                except Exception:
+                    pass
+                deadline = time.time() + timeout
+            time.sleep(0.05)
+
+
+def _release_lock(lock_path):
+    try: os.remove(lock_path)
+    except Exception: pass
 
 
 # ── 서명 요청 헬퍼 ──
@@ -158,7 +183,12 @@ def _mark_price() -> float:
 
 
 def live_status() -> dict:
-    cfg = load_config(); s = _load_state()
+    cfg = load_config()
+    lock_path = _file_lock(STATE)
+    try:
+        s = _load_state()
+    finally:
+        _release_lock(lock_path)
     return {"enabled": cfg["enabled"], "armed": cfg.get("armed_engines", []),
             "global_cap_usdt": cfg.get("global_cap_usdt", 0), "leverage": cfg.get("leverage", 2),
             "daily_loss_limit_usdt": cfg.get("daily_loss_limit_usdt", 0),
@@ -185,7 +215,11 @@ class BinanceGuard:
             return False, f"엔진 증거금상한 초과({margin:.1f}>{cap})"
         if margin > cfg.get("global_cap_usdt", 0):
             return False, f"전체 상한 초과({margin:.1f}>{cfg.get('global_cap_usdt',0)})"
-        s = _load_state()
+        lock_path = _file_lock(STATE)
+        try:
+            s = _load_state()
+        finally:
+            _release_lock(lock_path)
         dll = cfg.get("daily_loss_limit_usdt", 0)
         if s["realized_pnl_today"] <= -abs(dll):
             return False, f"일일 손실한도 도달({s['realized_pnl_today']:.2f})"
@@ -259,8 +293,12 @@ class BinanceGuard:
         return {"live": True, "result": res}
 
     def record_realized(self, pnl_usdt: float):
-        s = _load_state(); s["realized_pnl_today"] += pnl_usdt; _save_state(s)
-        log.info(f"[{self.engine}] 실현손익 {pnl_usdt:+.2f} USDT → 당일누적 {s['realized_pnl_today']:+.2f}")
+        lock_path = _file_lock(STATE)
+        try:
+            s = _load_state(); s["realized_pnl_today"] += pnl_usdt; _save_state(s)
+            log.info(f"[{self.engine}] 실현손익 {pnl_usdt:+.2f} USDT → 당일누적 {s['realized_pnl_today']:+.2f}")
+        finally:
+            _release_lock(lock_path)
 
 
 if __name__ == "__main__":

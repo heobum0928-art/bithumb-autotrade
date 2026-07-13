@@ -114,6 +114,19 @@ def enter(coin: str, margin_usdt: float = None) -> str:
     if coin in positions:
         return f"⚠️ {coin} 이미 재량숏 포지션 보유 중 — 중복 진입 안 함"
 
+    # ★ 2026-07-13 버그수정: 같은 코인 중복만 막고 있어서, 다른 코인 여러 개 넣으면 엔진상한(50)을
+    #   넘겨서 누적될 수 있었음(에이전트 감사로 발견) — 코인 무관 누적 증거금으로 상한 체크 추가.
+    #   live만 합산: margin_guard.open_short()는 게이트 실패 시 실주문 코드(POST /sapi/v1/margin/order)에
+    #   도달하기 전 조기 return하므로(margin_guard.py:219-222), dry 포지션은 코드 구조상 거래소에 전혀
+    #   닿지 않음 — 실제 증거금 소모 0 확정. 전부 합산하면 dry잔재가 실전상한을 잘못 막는 역효과만 생김.
+    open_margin = sum(p["margin_usdt"] for p in positions.values() if p.get("live"))
+    engine_caps = load_config().get("engine_caps_usdt", {})
+    ecap = engine_caps.get(ENGINE)
+    if ecap is None:
+        return f"🚨 설정오류: engine_caps_usdt에 {ENGINE} 없음 — 진입 차단(margin_live_config.json 확인 필요)"
+    if open_margin + margin_usdt > ecap:
+        return f"⚠️ {coin} 진입 보류 — 누적노출 {open_margin:.0f}+{margin_usdt:.0f} > 엔진상한 {ecap} (기존 포지션 정리 후 재시도)"
+
     entry_price = _price(sym)
     if entry_price <= 0:
         return f"❌ {coin} 시세 조회 실패(0)"

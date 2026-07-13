@@ -12,7 +12,7 @@ live_guard/binance_guard와 동일한 4중 관문 + FAIL-SAFE OFF.
    "global_cap_usdt": 100, "daily_loss_limit_usdt": 30, "leverage": 2, "test_mode": false}
 원장 data/margin_orders.csv | 상태 data/margin_live_state.json
 """
-import json, csv, time, hmac, hashlib, logging
+import json, csv, time, hmac, hashlib, logging, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -67,6 +67,34 @@ def _save_state(s):
         tmp = STATE.with_suffix(".tmp"); tmp.write_text(json.dumps(s, indent=2), encoding="utf-8"); tmp.replace(STATE)
     except Exception as e:
         log.warning(f"state 저장 실패: {e}")
+
+
+def _file_lock(path, timeout=5.0):
+    """★ 2026-07-13 버그수정: mshort·rsishort·manualshort 3개 프로세스가 같은
+    margin_live_state.json에 동시 read-modify-write하면 한쪽 손실기록이 유실되어
+    일일손실한도 게이트가 무력화될 수 있었음(에이전트 감사로 발견). 배타적 파일생성 기반
+    락으로 read-modify-write를 직렬화. Windows 호환(os.open O_CREAT|O_EXCL)."""
+    lock_path = str(path) + ".lock"
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return lock_path
+        except FileExistsError:
+            if time.time() > deadline:
+                try:
+                    if time.time() - os.path.getmtime(lock_path) > 10:
+                        os.remove(lock_path)   # 비정상종료로 남은 오래된 락 제거 후 재시도
+                except Exception:
+                    pass
+                deadline = time.time() + timeout
+            time.sleep(0.05)
+
+
+def _release_lock(lock_path):
+    try: os.remove(lock_path)
+    except Exception: pass
 
 
 _time_offset = {"ms": None, "checked_at": 0.0}
@@ -171,7 +199,12 @@ def get_borrowed(coin) -> float:
 
 
 def live_status():
-    cfg = load_config(); s = _load_state()
+    cfg = load_config()
+    lock_path = _file_lock(STATE)
+    try:
+        s = _load_state()
+    finally:
+        _release_lock(lock_path)
     return {"enabled": cfg["enabled"], "armed": cfg.get("armed_engines", []),
             "global_cap_usdt": cfg.get("global_cap_usdt", 0), "leverage": cfg.get("leverage", 2),
             "daily_loss_limit_usdt": cfg.get("daily_loss_limit_usdt", 0),
@@ -195,7 +228,14 @@ class MarginGuard:
             return False, f"엔진 증거금상한 초과({margin_usdt:.1f}>{cap})"
         if margin_usdt > cfg.get("global_cap_usdt", 0):
             return False, f"전체상한 초과"
-        s = _load_state()
+        # ★ 2026-07-13: record_realized()와 동일 락으로 상태읽기 보호 — 완전한 원자성(진입 결정~주문 전체)은
+        #   아니지만(네트워크 주문호출까지 락을 걸면 크래시 시 데드락 위험), 최소한 절반쓰기 상태를 읽는
+        #   것과 record_realized()의 갱신이 서로 겹치는 걸 막아 경쟁창을 최대한 좁힘.
+        lock_path = _file_lock(STATE)
+        try:
+            s = _load_state()
+        finally:
+            _release_lock(lock_path)
         if s["realized_pnl_today"] <= -abs(cfg.get("daily_loss_limit_usdt", 0)):
             return False, f"일일손실한도 도달({s['realized_pnl_today']:.2f})"
         return True, "OK"
@@ -282,8 +322,12 @@ class MarginGuard:
         return {"live": True, "close_usdt": fill_usdt, "result": res}
 
     def record_realized(self, pnl_usdt):
-        s = _load_state(); s["realized_pnl_today"] += pnl_usdt; _save_state(s)
-        log.info(f"[{self.engine}] 실현손익 {pnl_usdt:+.2f} USDT → 당일 {s['realized_pnl_today']:+.2f}")
+        lock_path = _file_lock(STATE)
+        try:
+            s = _load_state(); s["realized_pnl_today"] += pnl_usdt; _save_state(s)
+            log.info(f"[{self.engine}] 실현손익 {pnl_usdt:+.2f} USDT → 당일 {s['realized_pnl_today']:+.2f}")
+        finally:
+            _release_lock(lock_path)
 
 
 if __name__ == "__main__":

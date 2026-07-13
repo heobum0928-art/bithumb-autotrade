@@ -169,6 +169,7 @@ def main():
     global UNIVERSE
     positions = _load(POS_PATH, {}); cooldown = {}
     last_refresh = 0.0
+    last_capcfg_alert = 0.0   # ★ engine_caps_usdt 설정누락 알림 스팸방지용 타임스탬프
     api_fail = 0   # ★ 마진잔고 조회 연속실패 카운터 — IP차단 등으로 조용히 0 반환되는 걸 감지·알림
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
@@ -203,6 +204,16 @@ def main():
                     except Exception: pass
                 api_fail = 0
 
+            # ★ 엔진상한 설정 유효성 — 루프 밖에서 사이클당 1회만 확인(코인마다 반복하면 알림 폭주)
+            engine_caps = load_config().get("engine_caps_usdt", {})
+            if ENGINE not in engine_caps:
+                log.error(f"설정오류: engine_caps_usdt에 {ENGINE} 없음 — 신규진입 전면 차단(안전상 fail-closed)")
+                if now - last_capcfg_alert >= 1800:   # 30분에 한 번만 알림(스팸 방지)
+                    try: notify.send(f"🚨 마진숏봇: engine_caps_usdt에 {ENGINE} 설정 없음 — 신규진입 전면 차단 중, margin_live_config.json 확인 필요")
+                    except Exception: pass
+                    last_capcfg_alert = now
+                engine_caps = None   # 아래 루프에서 신규진입 전부 스킵시킬 신호
+
             # 1) 신호 탐지 — 6h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
             #    1차: 24h 변동률로 후보 추림(6h+40%면 24h도 최소 15%↑) → 2차: 후보만 5분봉으로 6h 정밀계산
             for coin in UNIVERSE:
@@ -221,11 +232,16 @@ def main():
                 if px6 > 0: px = px6
                 ret2h = ret6h   # 기록용(6h 상승률)
                 vr = 0.0
-                # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 전체상한 초과 방지)
+                # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 엔진 자체상한 초과 방지)
+                # ★ 2026-07-13 버그수정: global_cap_usdt(엔진 3개 합산 180)로 체크하고 있어서
+                #   mshort 혼자 180까지 쌓일 수 있었음(자기 엔진상한 100을 무시) → 자기 엔진상한으로 교체.
+                #   설정유효성(engine_caps_usdt에 ENGINE 존재하는지)은 루프 진입 전에 한 번만 확인함(위쪽).
+                if engine_caps is None:
+                    continue   # 설정오류로 이번 사이클은 신규진입 전면 스킵(알림은 위에서 사이클당 1회만 이미 보냄)
                 open_margin = sum(p["margin"] for p in positions.values())
-                gcap = load_config().get("global_cap_usdt", 0)
-                if open_margin + MARGIN_PER_TRADE > gcap:
-                    log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>전체상한 {gcap}")
+                ecap = engine_caps[ENGINE]
+                if open_margin + MARGIN_PER_TRADE > ecap:
+                    log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>엔진상한 {ecap}")
                     continue
                 # 진입
                 margin = min(MARGIN_PER_TRADE, get_margin_usdt())
