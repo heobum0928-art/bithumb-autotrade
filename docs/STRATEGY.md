@@ -884,3 +884,19 @@ manual_trader류에 시간기반 청산·이자비용 미반영.
 **리뷰훅 성능 메모**: 8회 왕복 중 6건은 실제 버그(설정누락시 알림스팸, 초기화안된 변수, 중복체크로직,
 락함수 정의만하고 미사용, TOCTOU 창), 2건은 코드 직접대조로 반박된 오탐("live:True 없음"— 실제로 있음,
 "_save_state가 예외전파"— 실제로 항상 삼킴). 오탐도 근거는 그럴듯해서 매번 직접 검증 필요했음.
+
+### ★★★ 로깅 버그 — UNI 손절 알림을 놓친 진짜 원인 (2026-07-14)
+UNI가 01:43 손절(-3.10%)됐는데 모니터가 못 잡았음(사용자가 "상태"로 물어봐서 사후 발견). 원인 추적:
+`logging.basicConfig()`는 **프로세스당 최초 1회만 유효**(그 이후 호출은 조용히 무시됨). `tg_bot.py`가
+`manual_trader`를 `margin_manual_trader`보다 먼저 import해서, manual_trader의 basicConfig가 루트로거를
+선점 → margin_manual_trader의 basicConfig는 무시되고, **거기서 찍는 모든 로그(진입·청산·손절 포함)가
+manual_trader.log로 새어나가고 있었음**. UNI 청산 로그를 확인해보니 실제로 `logs/manual_trader.log`에
+`[MANUAL]` 태그로 들어가 있었음(margin_manual_trader.log가 아니라). 모니터는 margin_manual_trader.log를
+감시하고 있었으니 당연히 못 봄.
+**수정**: `manual_trader.py`·`margin_manual_trader.py` 둘 다 `logging.basicConfig()` 대신 `margin_guard.py`와
+동일한 "로거 전용 핸들러 직접부착"(`if not log.handlers: log.addHandler(...)`) 패턴으로 교체 +
+`propagate=False`(두 모듈이 한 프로세스에 같이 로드되므로 중복로깅 방지). import 순서와 완전히 무관해짐.
+같은 프로세스에서 import 순서 재현 검증(manual_trader → margin_manual_trader 순서로 import 후 각자 로그 →
+정확히 자기 파일에 기록됨 확인).
+**교훈**: 여러 봇 모듈을 한 프로세스(tg_bot.py)에 같이 import하는 구조에서는 `logging.basicConfig()`가
+위험함 — 이후 같은 패턴으로 새 모듈을 tg_bot에 추가할 때마다 반드시 로거전용 핸들러 방식을 쓸 것.

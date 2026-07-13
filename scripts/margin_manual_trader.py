@@ -45,9 +45,16 @@ TRAIL_MULT, TRAIL_MIN, TRAIL_MAX = 2.0, 3.0, 8.0
 ARM_MULT, ARM_MIN, ARM_MAX = 2.5, 4.0, 10.0
 
 Path(ROOT / "logs").mkdir(exist_ok=True)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [MMANUAL] %(message)s",
-    handlers=[logging.FileHandler(ROOT / "logs" / "margin_manual_trader.log", encoding="utf-8")])
+# ★ 2026-07-13 버그수정: logging.basicConfig()는 프로세스당 최초 1회만 유효(이후 호출은 무시됨).
+#   tg_bot.py가 manual_trader를 먼저 import해서 그쪽 basicConfig가 루트로거를 선점 → 이 모듈의
+#   basicConfig는 조용히 무시되고, 여기서 찍는 로그(청산·손절 포함)가 전부 manual_trader.log로
+#   새어나가고 있었음(UNI 손절 이벤트를 모니터가 놓친 원인). margin_guard.py와 동일하게 이 로거
+#   전용 핸들러를 직접 붙이는 방식으로 교체 — 다른 모듈의 basicConfig 호출 순서와 무관하게 항상 자기 파일에 씀.
 log = logging.getLogger(__name__)
+if not log.handlers:
+    h = logging.FileHandler(ROOT / "logs" / "margin_manual_trader.log", encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s [MMANUAL] %(message)s"))
+    log.addHandler(h); log.setLevel(logging.INFO); log.propagate = False
 
 
 def _clamp(x, lo, hi):

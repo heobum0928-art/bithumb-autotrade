@@ -44,9 +44,15 @@ TRAIL_MULT, TRAIL_MIN, TRAIL_MAX = 2.0, 3.0, 8.0
 ARM_MULT, ARM_MIN, ARM_MAX = 2.5, 4.0, 10.0
 
 Path(ROOT / "logs").mkdir(exist_ok=True)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [MANUAL] %(message)s",
-    handlers=[logging.FileHandler(ROOT / "logs" / "manual_trader.log", encoding="utf-8")])
+# ★ 2026-07-13 버그수정(margin_manual_trader.py와 동일건): logging.basicConfig()는 프로세스당
+#   최초 1회만 유효 — 이 모듈이 먼저 import되면 문제 없어 보이지만, import 순서가 바뀌거나 다른
+#   모듈이 먼저 basicConfig를 호출하면 이 모듈 로그가 엉뚱한 파일로 샐 수 있음. 로거 전용 핸들러
+#   직접 부착 방식으로 교체해 import 순서와 완전히 무관하게 만듦.
 log = logging.getLogger(__name__)
+if not log.handlers:
+    h = logging.FileHandler(ROOT / "logs" / "manual_trader.log", encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s [MANUAL] %(message)s"))
+    log.addHandler(h); log.setLevel(logging.INFO); log.propagate = False
 
 _client = None
 def _get_client():
