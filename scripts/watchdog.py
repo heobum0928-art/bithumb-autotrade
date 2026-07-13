@@ -56,10 +56,14 @@ BOTS = {
     "crossex_logger":        ROOT / "scripts" / "crossex_logger.py",   # 교차거래소 선행신호 로거 (순수로깅·매매0, 격리)
     "volume_radar":          ROOT / "scripts" / "volume_radar.py",     # 거래대금 급증 레이더 (순수로깅·매매0, 격리)
     "accum_trader":          ROOT / "scripts" / "accum_trader.py",     # 매집 단타 (live_guard 제어, 약세장 역추세 실전)
-    "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py", # 신규상장 감지·자동진입 (실전, 10만원, 손절-5%·트레일+20%→-10%·30분)
+    # "newlisting_monitor" 은퇴 (2026-07-13): 6일간 실전체결 0건(유일 실전창 7/3에도 "90초내 체결가못잡음"으로
+    # 놓침, 7/7 23시 전체disarm 후 재arm 안 됨), API타임아웃·DNS실패로 최대 7시간 다운 반복 — 신뢰성 문제.
+    # 게다가 근본 전략도 이미 죽음(STRATEGY.md: 신규상장펌핑 5분만 늦어도 11/11 전패) — 재검토(2026-07-13)해도
+    # 숏 반전도 안 됨(업비트/빗썸 원화프리미엄 현상이라 바이낸스엔 거의 안 옮음, n=3뿐).
+    # "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py",
     "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
     "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
-    # "futures_logger" 제거 (2026-06-30): 선물 미사용, CPU 버그, 불필요
+    "futures_logger":        ROOT / "scripts" / "futures_logger.py",   # 선물 펀딩/OI/롱숏 로거 (순수로깅·매매0, margin_short 오버레이 필터 후보용, 2026-07-13 유니버스 재정렬 후 재개)
     # "lead_ws_trader" 폐기 (2026-07-02): 716건 비용후 -0.252%/t-4.07 통계적 확정손실 (#41)
     # "momentum_trader" 폐기 (2026-07-03): 90일 절제백테 전 구간(15분~168H) 전부 음수(t-17.5~-1.3),
     # 실측 15건도 -46.21%p 일치 확인. "오른 코인 추격"이 알트에서 전 타임프레임 역효과 (#42)
