@@ -40,6 +40,7 @@ sys.path.insert(0, str(KIS_PATH))
 
 import manual_trader
 import margin_manual_trader
+import margin_manual_long_trader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -256,6 +257,10 @@ def cmd_margin_manual_status() -> str:
     return margin_manual_trader.status_text()
 
 
+def cmd_margin_manual_long_status() -> str:
+    return margin_manual_long_trader.status_text()
+
+
 COMMANDS = {
     "/status": cmd_status,
     "/trades": cmd_trades,
@@ -263,6 +268,7 @@ COMMANDS = {
     "/kis":    cmd_kis,
     "/재량":     cmd_manual_status,
     "/재량숏":    cmd_margin_manual_status,
+    "/재량롱":    cmd_margin_manual_long_status,
 }
 
 HELP_TEXT = (
@@ -275,8 +281,11 @@ HELP_TEXT = (
     "/사 코인명 — 재량 진입 (예: /사 MPLX). 변동성 실측 기반 손절·트레일 자동 설정, 익절상한 없음\n"
     "/재량   — 열린 재량 포지션 상태\n"
     "\n<b>[재량매매-바이낸스숏]</b> (기본 모의/dry — data/margin_live_config.json armed_engines에 manualshort 추가 전까지 실전 안 나감)\n"
-    "/숏 코인명 — 재량 마진숏 진입 (예: /숏 PYR). 변동성 실측 기반 손절·트레일 자동 설정(방향반대), 증거금20USDT\n"
-    "/재량숏  — 열린 재량숏 포지션 상태"
+    "/숏 코인명 — 재량 마진숏 진입 (예: /숏 PYR). 변동성 실측 기반 손절·트레일 자동 설정(방향반대), 증거금50USDT\n"
+    "/재량숏  — 열린 재량숏 포지션 상태\n"
+    "\n<b>[재량매매-바이낸스롱]</b> (기본 모의/dry — data/margin_live_config.json armed_engines에 manuallong 추가 전까지 실전 안 나감)\n"
+    "/롱 코인명 — 재량 마진롱 진입 (예: /롱 WLD). 변동성 실측 기반 손절·트레일 자동 설정, 증거금50USDT\n"
+    "/재량롱  — 열린 재량롱 포지션 상태"
 )
 
 MANUAL_CHECK_INTERVAL_SEC = 15
@@ -324,6 +333,12 @@ def main() -> None:
                 except Exception as e:
                     log.error(f"재량숏진입 오류: {e}")
                     reply = f"❌ 진입 처리 중 오류: {e}"
+            elif cmd == "/롱" and len(parts) >= 2:
+                try:
+                    reply = margin_manual_long_trader.enter(parts[1])
+                except Exception as e:
+                    log.error(f"재량롱진입 오류: {e}")
+                    reply = f"❌ 진입 처리 중 오류: {e}"
             elif cmd in COMMANDS:
                 reply = COMMANDS[cmd]()
             elif cmd in ("/help", "/start"):
@@ -347,6 +362,11 @@ def main() -> None:
                     send(m)
             except Exception as e:
                 log.error(f"재량숏 포지션 점검 오류: {e}")
+            try:
+                for m in margin_manual_long_trader.check_positions():
+                    send(m)
+            except Exception as e:
+                log.error(f"재량롱 포지션 점검 오류: {e}")
 
         time.sleep(1)
 

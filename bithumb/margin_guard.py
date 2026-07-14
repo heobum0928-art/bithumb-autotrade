@@ -198,6 +198,19 @@ def get_borrowed(coin) -> float:
     return 0.0
 
 
+def get_held(coin) -> float:
+    """해당 코인의 현재 보유(매수한, 자유잔고) 수량 — 롱 포지션 크기. get_borrowed()의 롱 버전."""
+    try:
+        r = _signed("GET", "/sapi/v1/margin/account")
+        if r.status_code == 200:
+            for a in r.json().get("userAssets", []):
+                if a["asset"] == coin:
+                    return float(a["free"])
+    except Exception as e:
+        log.warning(f"보유조회 실패: {e}")
+    return 0.0
+
+
 def live_status():
     cfg = load_config()
     lock_path = _file_lock(STATE)
@@ -319,6 +332,78 @@ class MarginGuard:
         fill_usdt = float(res.get("cummulativeQuoteQty", 0))
         log.warning(f"[{self.engine}] ★마진숏청산 {sym} {res.get('executedQty')} (지불 {fill_usdt:.2f} USDT)")
         self._ledger("close_short", coin, qty, res)
+        return {"live": True, "close_usdt": fill_usdt, "result": res}
+
+    def open_long(self, coin, margin_usdt):
+        """마진 롱 진입: 증거금×레버리지 명목만큼 USDT를 빌려서 시장가 매수.
+        가드 통과 시에만 실주문. 반환: {live/dry, qty, ...}. open_short의 방향 반대(빌리는 게 USDT)."""
+        cfg = load_config()
+        ok, reason = self._gate(margin_usdt)
+        if not ok:
+            log.info(f"[{self.engine}] 롱진입 차단(dry) {coin} 증거금{margin_usdt} — {reason}")
+            self._ledger("open_long", coin, 0, f"DRY:{reason}")
+            return {"dry": True, "reason": reason}
+        sym = f"{coin}USDT"
+        price = _price(sym)
+        if price <= 0:
+            return {"error": "price 실패"}
+        lev = cfg.get("leverage", 2)
+        notional = margin_usdt * lev
+        step, minn = _symbol_filters(sym)
+        if notional < minn:
+            return {"error": f"명목 {notional:.1f} < 최소주문 {minn}"}
+        qty = _round_step(notional / price, step)
+        if qty <= 0:
+            return {"error": "수량 0"}
+        # 시장가 매수 + 자동 borrow(USDT 부족분)
+        try:
+            r = _signed("POST", "/sapi/v1/margin/order",
+                        {"symbol": sym, "side": "BUY", "type": "MARKET",
+                         "quantity": qty, "sideEffectType": "MARGIN_BUY", "isIsolated": "FALSE"})
+            res = r.json()
+            if r.status_code != 200:
+                log.error(f"[{self.engine}] ★롱진입 실패 {sym} {qty} → {res}")
+                self._ledger("open_long", coin, qty, f"ERR:{res}")
+                return {"error": res}
+        except Exception as e:
+            self._ledger("open_long", coin, qty, f"ERR:{e}")
+            return {"error": str(e)}
+        fill_qty = float(res.get("executedQty", qty))
+        fill_usdt = float(res.get("cummulativeQuoteQty", qty * price))
+        log.warning(f"[{self.engine}] ★마진롱진입 {sym} {fill_qty} (지불 {fill_usdt:.2f} USDT) @~{price:.6g}")
+        self._ledger("open_long", coin, fill_qty, res)
+        return {"live": True, "qty": fill_qty, "entry_usdt": fill_usdt, "price": price, "result": res}
+
+    def close_long(self, coin):
+        """마진 롱 청산: 보유 수량을 시장가 매도 + 자동상환(빌린 USDT). close_short과 반대로
+        '보유량 초과 매도'를 막아야 하므로 내림(_round_step)을 씀(청산은 _round_step_up이 아님)."""
+        cfg = load_config()
+        if not cfg["enabled"] or self.engine not in cfg.get("armed_engines", []):
+            self._ledger("close_long", coin, 0, "DRY:미arm")
+            return {"dry": True}
+        sym = f"{coin}USDT"
+        held = get_held(coin)
+        if held <= 0:
+            return {"error": "보유수량 0(청산할 롱 없음)"}
+        step, _ = _symbol_filters(sym)
+        qty = _round_step(held, step)
+        if qty <= 0:
+            return {"error": "수량 0"}
+        try:
+            r = _signed("POST", "/sapi/v1/margin/order",
+                        {"symbol": sym, "side": "SELL", "type": "MARKET",
+                         "quantity": qty, "sideEffectType": "AUTO_REPAY", "isIsolated": "FALSE"})
+            res = r.json()
+            if r.status_code != 200:
+                log.error(f"[{self.engine}] ★롱청산 실패 {sym} {qty} → {res}")
+                self._ledger("close_long", coin, qty, f"ERR:{res}")
+                return {"error": res}
+        except Exception as e:
+            self._ledger("close_long", coin, qty, f"ERR:{e}")
+            return {"error": str(e)}
+        fill_usdt = float(res.get("cummulativeQuoteQty", 0))
+        log.warning(f"[{self.engine}] ★마진롱청산 {sym} {res.get('executedQty')} (수취 {fill_usdt:.2f} USDT)")
+        self._ledger("close_long", coin, qty, res)
         return {"live": True, "close_usdt": fill_usdt, "result": res}
 
     def record_realized(self, pnl_usdt):

@@ -900,3 +900,17 @@ manual_trader.log로 새어나가고 있었음**. UNI 청산 로그를 확인해
 정확히 자기 파일에 기록됨 확인).
 **교훈**: 여러 봇 모듈을 한 프로세스(tg_bot.py)에 같이 import하는 구조에서는 `logging.basicConfig()`가
 위험함 — 이후 같은 패턴으로 새 모듈을 tg_bot에 추가할 때마다 반드시 로거전용 핸들러 방식을 쓸 것.
+
+### 재량롱(manuallong) 도구 신설 — 바이낸스 마진, 모의 (2026-07-14)
+사용자 "롱전략이 없어?" → PARTI·ETHFI 등 하락 후 반등 국면 관찰 계기. margin_manual_trader.py(재량숏)와
+완전히 동일한 철학·구조로 방향만 반대(peak_price 추적, 손절 하방, 트레일 상승분 기준) 신설.
+- **주의**: 이 프로젝트에서 "투매반등 롱" 자동신호는 이미 검증 실패(STRATEGY.md 기존기록: "전 변형
+  마이너스·청산높음") — 이 도구는 자동신호가 아니라 순수 재량(사람 판단+봇 리스크관리)이라 무관.
+- `bithumb/margin_guard.py`에 `open_long()`/`close_long()`/`get_held()` 신설(get_borrowed()의 롱 버전).
+  close_long은 보유량 초과매도 방지 위해 내림(`_round_step`, close_short의 올림과 반대).
+- `scripts/margin_manual_long_trader.py`: margin_manual_trader.py와 동일 안전패턴(청산실패시 포지션유지,
+  로거전용핸들러로 로깅버그 처음부터 회피, 누적노출체크).
+- tg_bot.py에 `/롱 코인명`·`/재량롱` 명령 추가, 15초 주기 감시루프에도 등록.
+- `margin_live_config.json`: engine_caps_usdt.manuallong=50 추가, **armed_engines엔 미포함(기본 dry)**.
+  전체상한 180→230(4엔진 합산).
+- 모의 테스트(WLD) 정상 작동 확인 후 정리. 실전 전환은 사용자 승인 필요.

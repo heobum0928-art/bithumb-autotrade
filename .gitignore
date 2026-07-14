@@ -28,3 +28,7 @@ data/_borrowable_coins.txt
 data/_borrowable_all.txt
 data/rsi_short_pos.json
 data/rsi_short_trades.csv
+data/margin_manual_pos.json
+data/margin_manual_trades.csv
+data/margin_manual_long_pos.json
+data/margin_manual_long_trades.csv
