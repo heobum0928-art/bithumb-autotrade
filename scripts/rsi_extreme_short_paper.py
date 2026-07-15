@@ -137,46 +137,13 @@ def main():
         try:
             now = time.time()
             uni = universe() or uni
-            # 24h 변동률 (실전봇 영역 제외용)
-            chg24 = {}
-            try:
-                for x in requests.get(f"{BASE}/api/v3/ticker/24hr", timeout=15).json():
-                    chg24[x["symbol"]] = float(x["priceChangePercent"])
-            except Exception:
-                pass
-
-            # 1) 신호 탐지
             guard = MarginGuard(ENGINE)
-            for coin in uni:
-                sym = f"{coin}USDT"
-                if sym in positions or cooldown.get(sym, 0) > now:
-                    continue
-                c24 = chg24.get(sym, 0)
-                if c24 >= MAX_24H_CHG:   # 마진숏봇이 잡는 영역 → 스킵(중복 방지)
-                    continue
-                hit, rsi, vr, px, _ = check_signal(sym)
-                if not hit or px <= 0:
-                    continue
-                # 동시노출 상한: 실전 포지션 이미 있으면 신규 실전진입 보류(동시 1건 — 증거금상한이 곧 1건 규모)
-                open_margin = sum(p["margin"] for p in positions.values() if p.get("live"))
-                if open_margin > 0:
-                    log.info(f"진입 보류 {sym}(RSI{rsi:.0f}): 이미 실전포지션 {open_margin:.0f}USDT 열려있음(상한 {MARGIN_PER_TRADE:.0f})")
-                    continue
-                margin = min(MARGIN_PER_TRADE, get_margin_usdt())
-                res = guard.open_short(coin, margin)
-                cooldown[sym] = now + COOLDOWN_H*3600
-                live = bool(res.get("live"))
-                entry_px = res.get("price", px) if live else px
-                positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": entry_px, "rsi": round(rsi,1), "vr": round(vr,1),
-                                  "chg24": round(c24,1), "exit_ts": now + HOLD_H*3600, "margin": margin, "live": live,
-                                  "min_p": entry_px, "max_p": entry_px, "entry_iso": datetime.now(KST).isoformat()}
-                tag = "★실전" if live else "(모의)"
-                log.warning(f"숏 진입{tag} {sym} @{entry_px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
-                if live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
-                    try: notify.send(f"📉 RSI극단 숏 진입 {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
-                    except Exception: pass
 
-            # 2) 추적 + 만기 청산
+            # ★ 2026-07-16 순서변경: 예전엔 신규진입 스캔(코인 200+개, API콜 다수)이 먼저라서
+            #   PC재부팅 직후처럼 스캔이 느려지면 이미 만기된 포지션 청산이 몇 분~십여분 지연됐음
+            #   (실제로 RSR 포지션이 만기 3.7시간 지나도록 안 닫혀서 수동개입한 사건).
+            #   포지션 점검(만기청산·손절)을 항상 먼저 처리하도록 순서를 바꿔 이 지연을 원천 차단.
+            # 1) 추적 + 만기 청산 (신규진입 스캔보다 먼저)
             if positions:
                 try:
                     prices = {x["symbol"]: float(x["price"]) for x in requests.get(f"{BASE}/api/v3/ticker/price", timeout=10).json()}
@@ -205,7 +172,8 @@ def main():
                             continue
                     pnl = (1 - exit_px/entry)*100 - COST_PCT
                     pnl_usdt = p["margin"] * load_config().get("leverage",2) * (pnl/100) if is_live else 0.0
-                    if is_live: guard.record_realized(pnl_usdt)
+                    if is_live:
+                        guard.record_realized(pnl_usdt)
                     mfe = (1 - p["min_p"]/entry)*100
                     mae = (1 - p["max_p"]/entry)*100
                     log_trade(dict(entry_time=p["entry_iso"], exit_time=datetime.now(KST).isoformat(), symbol=sym,
@@ -213,12 +181,52 @@ def main():
                                    entry_price=entry, exit_price=exit_px, pnl_pct=round(pnl,2),
                                    mfe_pct=round(mfe,2), mae_pct=round(mae,2), reason=f"{HOLD_H}h만기"))
                     tag = "★실전" if is_live else "(모의)"
-                    pnl_note = f" ({pnl_usdt:+.1f}USDT)" if is_live else ""
+                    pnl_note = f" ({pnl_usdt:+.2f}USDT)" if is_live else ""
                     log.warning(f"숏 청산{tag} {sym} @{exit_px:g} pnl={pnl:+.2f}%{pnl_note} (최대유리+{mfe:.1f}% 최대역행{mae:+.1f}%)")
                     if is_live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
                         try: notify.send(f"📈 RSI극단 숏 청산 {sym} pnl={pnl:+.1f}%{pnl_note}")
                         except Exception: pass
                     del positions[sym]
+
+            _save(POS_PATH, positions)
+
+            # 24h 변동률 (실전봇 영역 제외용)
+            chg24 = {}
+            try:
+                for x in requests.get(f"{BASE}/api/v3/ticker/24hr", timeout=15).json():
+                    chg24[x["symbol"]] = float(x["priceChangePercent"])
+            except Exception:
+                pass
+
+            # 2) 신호 탐지 (포지션 점검 이후)
+            for coin in uni:
+                sym = f"{coin}USDT"
+                if sym in positions or cooldown.get(sym, 0) > now:
+                    continue
+                c24 = chg24.get(sym, 0)
+                if c24 >= MAX_24H_CHG:   # 마진숏봇이 잡는 영역 → 스킵(중복 방지)
+                    continue
+                hit, rsi, vr, px, _ = check_signal(sym)
+                if not hit or px <= 0:
+                    continue
+                # 동시노출 상한: 실전 포지션 이미 있으면 신규 실전진입 보류(동시 1건 — 증거금상한이 곧 1건 규모)
+                open_margin = sum(p["margin"] for p in positions.values() if p.get("live"))
+                if open_margin > 0:
+                    log.info(f"진입 보류 {sym}(RSI{rsi:.0f}): 이미 실전포지션 {open_margin:.0f}USDT 열려있음(상한 {MARGIN_PER_TRADE:.0f})")
+                    continue
+                margin = min(MARGIN_PER_TRADE, get_margin_usdt())
+                res = guard.open_short(coin, margin)
+                cooldown[sym] = now + COOLDOWN_H*3600
+                live = bool(res.get("live"))
+                entry_px = res.get("price", px) if live else px
+                positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": entry_px, "rsi": round(rsi,1), "vr": round(vr,1),
+                                  "chg24": round(c24,1), "exit_ts": now + HOLD_H*3600, "margin": margin, "live": live,
+                                  "min_p": entry_px, "max_p": entry_px, "entry_iso": datetime.now(KST).isoformat()}
+                tag = "★실전" if live else "(모의)"
+                log.warning(f"숏 진입{tag} {sym} @{entry_px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
+                if live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
+                    try: notify.send(f"📉 RSI극단 숏 진입 {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
+                    except Exception: pass
 
             _save(POS_PATH, positions)
         except Exception as e:
