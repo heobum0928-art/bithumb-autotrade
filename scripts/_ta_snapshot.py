@@ -115,10 +115,15 @@ def snapshot(symbol):
     print(f"  거래량배수(직전20봉평균 대비): {vratio:.1f}배")
     print()
     warn = []
-    if rsi_now < 35 and rsi_trend == "상승중":
-        warn.append("RSI가 낮은데 이미 반등중 — 숏 진입 시 늦었을 가능성")
-    if rsi_now > 65 and rsi_trend == "하락중":
-        warn.append("RSI가 높은데 이미 꺾이는중 — 롱 진입 시 늦었을 가능성")
+    # ★ 2026-07-16 일반화: UNI·SNX·DEXE·ONDO 재량숏 손실 4건 전부 공통점 발견 —
+    #   "RSI가 낮을 때만"이 아니라 절대 RSI 구간과 무관하게 "최근 몇 봉 내 저점 찍고 반등 중"이면
+    #   전부 위험(ONDO는 RSI55~60대에서 반등해서 기존 <35 조건에 안 걸렸었음). 트로프 대비 회복폭으로 판정.
+    rsi_recovery = rsi_now - min(rseries) if rseries else 0
+    if rsi_recovery >= 8 and rsi_trend == "상승중":
+        warn.append(f"RSI가 최근저점({min(rseries):.1f})에서 이미 {rsi_recovery:.1f}p 반등 중 — 숏 진입 시 늦었을 가능성 (절대RSI값 무관)")
+    rsi_pullback = max(rseries) - rsi_now if rseries else 0
+    if rsi_pullback >= 8 and rsi_trend == "하락중":
+        warn.append(f"RSI가 최근고점({max(rseries):.1f})에서 이미 {rsi_pullback:.1f}p 꺾이는 중 — 롱 진입 시 늦었을 가능성 (절대RSI값 무관)")
     if bb is not None and bb < 0 and rsi_trend == "상승중":
         warn.append("볼린저 하단 이탈 + RSI 반등 = 과매도 반전 초기 신호(숏에 불리)")
     if warn:

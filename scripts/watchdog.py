@@ -71,6 +71,7 @@ BOTS = {
     # "spike_tracker" 제거 (2026-06-30): volume_radar와 역할 겹침, 불필요
     "upbit_notice_monitor":  ROOT / "scripts" / "upbit_notice_monitor.py",   # 업비트 상장공지 감지지연 측정 (순수로깅·매매0)
     "binance_notice_monitor": ROOT / "scripts" / "binance_notice_monitor.py", # 바이낸스 상장공지 감지지연 측정 (순수로깅·매매0)
+    "bithumb_notice_monitor": ROOT / "scripts" / "bithumb_notice_monitor.py", # 빗썸 공지 감지지연 측정 (순수로깅·매매0, 2026-07-16 watchdog 미등록으로 5일간 방치됐던 것 발견·등록)
     "reaction_paper_trader": ROOT / "scripts" / "reaction_paper_trader.py",  # #45 상장공지 반응 모의매매 (순수모의·매매0, 손절-3%/트레일만/익절상한없음)
     "orderflow_logger":      ROOT / "scripts" / "orderflow_logger.py",       # 체결방향 불균형(OFI) 로거 (순수로깅·매매0, 백테스트용 데이터 축적)
     # "quiet_accum_screener" 임시 제거 (2026-07-09): exit=1 크래시루프 발견,
