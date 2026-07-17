@@ -167,7 +167,7 @@ def enter(coin: str, margin_usdt: float = None) -> str:
 
     mode = "🔴 실전" if is_live else "🔵 모의(dry)"
     return (f"{mode} 재량롱 진입 {coin} @{entry_price:,.6g} ({margin_usdt:.0f}USDT 증거금)\n"
-            f"실측변동성(2h): {vol_pct:.2f}%\n"
+            f"실측변동성(일봉20일): {vol_pct:.2f}%\n"
             f"손절: -{sl_pct:.1f}% (@{positions[coin]['stop_price']:,.6g}, 가격 떨어지면 손절)\n"
             f"트레일: +{arm_pct:.1f}% 도달 시 무장 → 고점대비 -{trail_pct:.1f}% 하락하면 청산\n"
             f"익절 상한 없음 — 오르는 만큼 트레일로 따라감")
