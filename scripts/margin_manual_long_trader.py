@@ -1,5 +1,5 @@
 """
-재량 마진롱 리스크관리 도구 (margin_manual_long_trader) — 2026-07-14.
+재량 마진롱 리스크관리 도구 (margin_manual_long_trader) — 2026-07-14, 중장기 세팅 2026-07-17.
 
 margin_manual_trader.py(재량 마진숏)와 완전히 동일한 철학, 방향만 반대(바이낸스 크로스마진 롱):
 "뭘 롱칠지"는 사람이 고르고(뉴스·차트 판단), "손절폭·사이징"은 봇이 기계적으로 정한다.
@@ -8,9 +8,15 @@ margin_manual_trader.py(재량 마진숏)와 완전히 동일한 철학, 방향�
 (docs/STRATEGY.md: "전 변형 마이너스·청산 높음"). 이 도구는 자동신호가 아니라 순수 재량 도구라
 그 검증실패와는 무관 — 사람 판단이 신호, 봇은 리스크관리만.
 
-핵심 규칙 (margin_manual_trader.py와 동일 — 진입 시점 실측 변동성 기반 SL/TRAIL):
-  진입 직전 최근 24개 5분봉의 평균 (고가-저가)/종가 %를 측정해 SL/TRAIL을 그 배수로 설정.
-  손실은 짧게, 수익은 길게(트레일링만, 고정 익절 없음).
+★ 2026-07-17 중장기 전환: 재량숏(margin_manual_trader)이 6건 중 5건 손절폭에 정확히 걸리며
+-14.6USDT(승률17%) 확정, manualshort 정지. 사용자 지시("승률보다 크게 먹는 방법, 단기말고 중장기")로
+이 도구를 2시간 단타형에서 일봉 기반 중장기 스윙형으로 전환. 손절/트레일 폭을 넓혀 노이즈에
+안 털리고 큰 상승을 끝까지 따라가는 쪽으로 재설계.
+
+핵심 규칙 (변동성 기반 SL/TRAIL, 단 2026-07-17부터 측정 기준을 일봉으로 변경):
+  진입 직전 최근 20일 일봉의 평균 (고가-저가)/종가 %를 측정해 SL/TRAIL을 그 배수로 설정
+  (2시간 5분봉 노이즈가 아니라 일간 변동성 — 며칠~몇 주 보유를 전제로 함).
+  손실은 짧게, 수익은 길게(트레일링만, 고정 익절 없음, 강제 시간청산 없음).
   ★ 롱이라 방향은 manual_trader.py(빗썸 재량롱)와 동일 — peak_price 추적, 저항 대신 고점 기준.
 
 사용법 (tg_bot.py에서 명령어로 호출):
@@ -39,13 +45,14 @@ ENGINE = "manuallong"
 BASE = "https://api.binance.com"
 POS_PATH = ROOT / "data" / "margin_manual_long_pos.json"
 TRADES_PATH = ROOT / "data" / "margin_manual_long_trades.csv"
-DEFAULT_MARGIN_USDT = 50.0   # live_config.json engine_caps_usdt["manuallong"]와 일치시킬 것
+DEFAULT_MARGIN_USDT = 20.0   # 2026-07-17 중장기 소액테스트 — live_config.json engine_caps_usdt["manuallong"]와 별개(상한은 그대로 유지)
 
-# 변동성 기반 SL/TRAIL 파라미터 — margin_manual_trader.py와 동일 배수/클램프
-VOL_LOOKBACK_BARS = 24     # 5분봉 24개 = 2시간
-SL_MULT, SL_MIN, SL_MAX = 2.5, 3.0, 8.0
-TRAIL_MULT, TRAIL_MIN, TRAIL_MAX = 2.0, 3.0, 8.0
-ARM_MULT, ARM_MIN, ARM_MAX = 2.5, 4.0, 10.0
+# ★ 2026-07-17 중장기 스윙 세팅 — 일봉 기준 변동성으로 SL/TRAIL을 넓게 잡아
+#   노이즈에 안 털리고 큰 상승을 트레일로 끝까지 따라가는 쪽으로 재설계.
+VOL_LOOKBACK_DAYS = 20      # 일봉 20개 = 약 3주
+SL_MULT, SL_MIN, SL_MAX = 1.5, 8.0, 20.0
+TRAIL_MULT, TRAIL_MIN, TRAIL_MAX = 2.0, 10.0, 25.0
+ARM_MULT, ARM_MIN, ARM_MAX = 1.2, 6.0, 15.0
 
 Path(ROOT / "logs").mkdir(exist_ok=True)
 # ★ logging.basicConfig() 대신 로거전용 핸들러 직접부착 — margin_manual_trader.py의 2026-07-13 버그
@@ -94,21 +101,21 @@ def _price(sym):
 
 
 def _measure_volatility_pct(sym: str) -> float:
-    """진입 직전 실측 변동성 — 최근 N개 5분봉의 평균 (고가-저가)/종가 %."""
+    """진입 직전 실측 변동성 — 최근 N개 일봉의 평균 (고가-저가)/종가 % (중장기 스윙용, 2026-07-17)."""
     try:
-        r = requests.get(f"{BASE}/api/v3/klines", params={"symbol": sym, "interval": "5m", "limit": VOL_LOOKBACK_BARS}, timeout=8)
+        r = requests.get(f"{BASE}/api/v3/klines", params={"symbol": sym, "interval": "1d", "limit": VOL_LOOKBACK_DAYS}, timeout=8)
         k = r.json()
         if r.status_code != 200 or not k:
-            return 2.0
+            return 8.0
     except Exception as e:
-        log.warning(f"캔들 조회 실패({e}) → 기본 변동성 2.0% 사용")
-        return 2.0
+        log.warning(f"캔들 조회 실패({e}) → 기본 변동성 8.0% 사용")
+        return 8.0
     ranges = []
     for c in k:
         hi, lo, cl = float(c[2]), float(c[3]), float(c[4])
         if cl > 0:
             ranges.append((hi - lo) / cl * 100)
-    return statistics.mean(ranges) if ranges else 2.0
+    return statistics.mean(ranges) if ranges else 8.0
 
 
 def enter(coin: str, margin_usdt: float = None) -> str:
