@@ -53,9 +53,9 @@ POLL_SEC = 300
 RSI_MIN = 92.0            # 5분봉 RSI(14) 문턱
 VOL_MULT = 3.0            # 신호봉 거래대금 / 직전20봉 평균
 MAX_24H_CHG = 40.0        # 24h 상승률 이 미만만 (마진숏봇 영역과 분리)
-HOLD_H = 4
+HOLD_H = 8   # 2026-07-18: 4h→8h (TRAIN/TEST 재검증, 4h t2.90/0.57 → 8h t3.42/1.42 둘다개선. 24h/48h는 TEST서 붕괴)
 COOLDOWN_H = 8
-COST_PCT = 0.20 + 0.12/24*HOLD_H   # 왕복비용 + 4h 대출이자
+COST_PCT = 0.20 + 0.12/24*HOLD_H   # 왕복비용 + 대출이자(HOLD_H 반영)
 MIN_QUOTE_VOL_5M = 10_000          # 유동성: 5분봉 거래대금 1만 USDT+ (검증서 이 필터가 오히려 개선)
 MARGIN_PER_TRADE = 30.0            # ★ MARGINAL 판정이라 소액 시작 — 증거금상한과 동일(동시 1건)
 
