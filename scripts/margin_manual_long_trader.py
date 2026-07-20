@@ -45,7 +45,7 @@ ENGINE = "manuallong"
 BASE = "https://api.binance.com"
 POS_PATH = ROOT / "data" / "margin_manual_long_pos.json"
 TRADES_PATH = ROOT / "data" / "margin_manual_long_trades.csv"
-DEFAULT_MARGIN_USDT = 20.0   # 2026-07-17 중장기 소액테스트 — live_config.json engine_caps_usdt["manuallong"]와 별개(상한은 그대로 유지)
+DEFAULT_MARGIN_USDT = 30.0   # 2026-07-20 ETH·LTC 2건 플러스 진행 확인 후 20→30 소폭 증액(n=2, 아직 확신단계 아님) — live_config.json engine_caps_usdt["manuallong"]와 별개(상한은 그대로 유지)
 
 # ★ 2026-07-17 중장기 스윙 세팅 — 일봉 기준 변동성으로 SL/TRAIL을 넓게 잡아
 #   노이즈에 안 털리고 큰 상승을 트레일로 끝까지 따라가는 쪽으로 재설계.
