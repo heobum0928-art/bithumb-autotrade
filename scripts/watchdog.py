@@ -62,7 +62,11 @@ BOTS = {
     # 숏 반전도 안 됨(업비트/빗썸 원화프리미엄 현상이라 바이낸스엔 거의 안 옮음, n=3뿐).
     # "newlisting_monitor":    ROOT / "scripts" / "newlisting_monitor.py",
     "rsi_trader":            ROOT / "scripts" / "rsi_trader.py",       # RSI 과매도반등 (검증된 첫 후보·모의 실측)
-    "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",   # 캐스케이드-반등 (#40, walk-forward 통과·모의 실측)
+    # "cascade_trader" 은퇴 (2026-07-20): 07-08에 108조합 그리드서치+봉종가 백테스트착시 발견으로
+    # "구제 불가" 확정된 뒤에도 모의로 계속 돌았음. 어디서도 이 데이터/로직을 안 씀(import·파일참조 0건),
+    # 최근 실측도 -1.5~-2.2% 손절만 반복 확인 — 새 정보 없이 이미 죽은 판정만 재확인하는 상태.
+    # newlisting_monitor(07-13)와 동일 사유로 완전 제거.
+    # "cascade_trader":        ROOT / "scripts" / "cascade_trader.py",
     "futures_logger":        ROOT / "scripts" / "futures_logger.py",   # 선물 펀딩/OI/롱숏 로거 (순수로깅·매매0, margin_short 오버레이 필터 후보용, 2026-07-13 유니버스 재정렬 후 재개)
     # "lead_ws_trader" 폐기 (2026-07-02): 716건 비용후 -0.252%/t-4.07 통계적 확정손실 (#41)
     # "momentum_trader" 폐기 (2026-07-03): 90일 절제백테 전 구간(15분~168H) 전부 음수(t-17.5~-1.3),
