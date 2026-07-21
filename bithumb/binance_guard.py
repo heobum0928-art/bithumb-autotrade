@@ -172,14 +172,66 @@ def get_position() -> dict:
     return {"amt": 0.0, "entry": 0.0, "mark": 0.0, "notional": 0.0, "unrealized": 0.0}
 
 
-def _mark_price() -> float:
+def _mark_price(sym: str = SYMBOL) -> float:
     try:
-        r = requests.get(f"{FAPI}/fapi/v1/ticker/price", params={"symbol": SYMBOL}, timeout=8)
+        r = requests.get(f"{FAPI}/fapi/v1/ticker/price", params={"symbol": sym}, timeout=8)
         if r.status_code == 200:
             return float(r.json()["price"])
     except Exception:
         pass
     return 0.0
+
+
+def _step_decimals(step) -> int:
+    """margin_guard.py와 동일 로직(2026-07-13 부동소수점 잔여 버그 수정) — 독립모듈 유지 위해 복제."""
+    if step <= 0: return 8
+    s = f"{step:.10f}".rstrip('0')
+    return len(s.split('.')[1]) if '.' in s else 0
+
+
+def _round_step(qty, step):
+    """step 배수로 내림 + 소수자릿수 반올림(부동소수점 잔여 제거) — margin_guard.py와 동일."""
+    if step <= 0: return qty
+    import math
+    steps = math.floor(qty / step + 1e-9)
+    return round(steps * step, _step_decimals(step))
+
+
+def _symbol_filters_futures(sym: str):
+    """선물 LOT_SIZE stepSize, MIN_NOTIONAL 반환 — /fapi 전용(margin_guard._symbol_filters의 선물판)."""
+    try:
+        r = requests.get(f"{FAPI}/fapi/v1/exchangeInfo", timeout=10)
+        for s in r.json()["symbols"]:
+            if s["symbol"] == sym:
+                f = s["filters"]
+                step = next((float(x["stepSize"]) for x in f if x["filterType"] == "LOT_SIZE"), 0.0)
+                minn = next((float(x.get("notional", 5.0)) for x in f if x["filterType"] == "MIN_NOTIONAL"), 5.0)
+                return step, minn
+    except Exception:
+        pass
+    return 0.0, 5.0
+
+
+def get_futures_position(sym: str) -> dict | None:
+    """임의 심볼의 선물 포지션 조회 — get_position()의 다중심볼판(코어는 BTCUSDT 고정이라 몰랐음).
+    ★ 조회 실패 시 None 반환(포지션 0과 구분) — close_short_futures()가 "API실패"를 "포지션 없음"으로
+    오인해 실제로 열려있는 포지션을 추적 포기하는 걸 막기 위함(margin_guard.py 청산실패 안전패턴과 동일)."""
+    try:
+        r = _signed("GET", "/fapi/v2/positionRisk", {"symbol": sym})
+        if r.status_code == 200:
+            d = r.json()
+            if d:
+                p = d[0]
+                amt = float(p.get("positionAmt", 0) or 0)
+                entry = float(p.get("entryPrice", 0) or 0)
+                mark = float(p.get("markPrice", 0) or 0)
+                return {"amt": amt, "entry": entry, "mark": mark,
+                        "notional": abs(amt) * mark, "unrealized": float(p.get("unRealizedProfit", 0) or 0)}
+            return {"amt": 0.0, "entry": 0.0, "mark": 0.0, "notional": 0.0, "unrealized": 0.0}
+        log.warning(f"포지션조회 실패({sym}): status={r.status_code} {r.text[:200]}")
+    except Exception as e:
+        log.warning(f"포지션조회 예외({sym}): {e}")
+    return None
 
 
 def live_status() -> dict:
@@ -290,6 +342,81 @@ class BinanceGuard:
             return {"error": str(e)}
         log.warning(f"[{self.engine}] ★실주문 {side} {qty}BTC(명목 {delta_notional:+.1f} USDT) @~{price:.0f} → {res.get('orderId')}")
         self._ledger(side, qty, delta_notional, res)
+        return {"live": True, "result": res}
+
+    def open_short_futures(self, coin: str, margin_usdt: float) -> dict:
+        """선물 숏 진입 — margin_guard.open_short()의 선물판(대출 불필요, 재고 제약 없음).
+        margin_short_trader의 마진대출 실패(-3045) 폴백 전용 — 백테스트 확인(2026-07-21):
+        마진 대비 비용은 더 들지만(반전 구간 펀딩비 역풍) 여전히 순양수, 대출막힌 코인 잡는 용도.
+        가드 통과 시에만 실주문."""
+        cfg = load_config()
+        ok, reason = self._gate(margin_usdt * cfg.get("leverage", 2))
+        if not ok:
+            log.info(f"[{self.engine}] 선물숏진입 차단(dry) {coin} 증거금{margin_usdt} — {reason}")
+            self._ledger("open_short_fut", 0, margin_usdt, f"DRY:{reason}")
+            return {"dry": True, "reason": reason}
+        sym = f"{coin}USDT"
+        price = _mark_price(sym)
+        if price <= 0:
+            return {"error": "price 실패"}
+        lev = cfg.get("leverage", 2)
+        notional = margin_usdt * lev
+        step, minn = _symbol_filters_futures(sym)
+        if notional < minn:
+            return {"error": f"명목 {notional:.1f} < 최소주문 {minn}"}
+        qty = _round_step(notional / price, step)
+        if qty <= 0:
+            return {"error": "수량 0"}
+        try:
+            _signed("POST", "/fapi/v1/leverage", {"symbol": sym, "leverage": int(lev)})
+        except Exception as e:
+            log.warning(f"[{self.engine}] 레버리지 설정 실패({sym}): {e}")
+        try:
+            r = _signed("POST", "/fapi/v1/order",
+                        {"symbol": sym, "side": "SELL", "type": "MARKET", "quantity": qty})
+            res = r.json()
+            if r.status_code != 200:
+                log.error(f"[{self.engine}] ★선물숏진입 실패 {sym} {qty} → {res}")
+                self._ledger("open_short_fut", qty, notional, f"ERR:{res}")
+                return {"error": res}
+        except Exception as e:
+            log.error(f"[{self.engine}] 선물숏진입 예외: {e}")
+            self._ledger("open_short_fut", qty, notional, f"ERR:{e}")
+            return {"error": str(e)}
+        fill_qty = float(res.get("executedQty", qty))
+        log.warning(f"[{self.engine}] ★선물숏진입(마진대출폴백) {sym} {fill_qty} (명목 {notional:.1f} USDT) @~{price:.6g}")
+        self._ledger("open_short_fut", fill_qty, notional, res)
+        return {"live": True, "qty": fill_qty, "entry_usdt": margin_usdt, "price": price, "result": res}
+
+    def close_short_futures(self, coin: str) -> dict:
+        """선물 숏 청산 — 현재 포지션 수량만큼 시장가 매수(BUY)로 반대매매."""
+        cfg = load_config()
+        if not cfg["enabled"] or self.engine not in cfg.get("armed_engines", []):
+            self._ledger("close_short_fut", 0, 0, "DRY:미arm")
+            return {"dry": True}
+        sym = f"{coin}USDT"
+        pos = get_futures_position(sym)
+        if pos is None:
+            log.error(f"[{self.engine}] ★선물숏청산: 포지션조회 실패 {sym} — 재시도 필요, 청산 시도 안 함")
+            return {"error": "포지션조회 실패(재시도 필요)"}
+        if pos["amt"] >= 0:
+            return {"error": "숏 포지션 없음(amt>=0)"}
+        qty = abs(pos["amt"])
+        try:
+            r = _signed("POST", "/fapi/v1/order",
+                        {"symbol": sym, "side": "BUY", "type": "MARKET", "quantity": qty,
+                         "reduceOnly": "true"})
+            res = r.json()
+            if r.status_code != 200:
+                log.error(f"[{self.engine}] ★선물숏청산 실패 {sym} {qty} → {res}")
+                self._ledger("close_short_fut", qty, 0, f"ERR:{res}")
+                return {"error": res}
+        except Exception as e:
+            log.error(f"[{self.engine}] 선물숏청산 예외: {e}")
+            self._ledger("close_short_fut", qty, 0, f"ERR:{e}")
+            return {"error": str(e)}
+        log.warning(f"[{self.engine}] ★선물숏청산 {sym} {res.get('executedQty')}")
+        self._ledger("close_short_fut", qty, 0, res)
         return {"live": True, "result": res}
 
     def record_realized(self, pnl_usdt: float):

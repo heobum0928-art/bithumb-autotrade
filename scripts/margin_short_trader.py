@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT))
 import requests
 from bithumb import notify
 from bithumb.margin_guard import MarginGuard, live_status, get_margin_usdt, load_config, get_borrowed
+from bithumb.binance_guard import BinanceGuard, load_config as load_futures_config, get_futures_usdt
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [MSHORT] %(message)s",
@@ -113,6 +114,39 @@ def load_borrowable():
 
 UNIVERSE = load_borrowable()   # 비면 main()의 첫 refresh가 채움
 
+# ★ 2026-07-21 선물 폴백 — 마진 대출재고 0으로 놓치던 코인(BANK·ACE류) 구제.
+#   백테스트 확인(scratchpad, 문서화 예정): 선물은 반전구간 펀딩비 역풍으로 마진보다 비용은 더 들지만
+#   여전히 순양수(TRAIN+2.17%/TEST+4.04% vs 마진+3.42%/+5.67%) — 대출 막힌 코인 전용 폴백으로만 사용,
+#   대출 가능하면 항상 마진 우선(경제성 더 좋음).
+FUTURES_ENGINE = "mshort_fut"
+FUTURES_UNIVERSE_PATH = ROOT / "data" / "_futures_tradeable.txt"
+
+
+def refresh_futures_tradeable():
+    """바이낸스 선물(USDⓈ-M)에 상장된 코인 전체 — 마진 대출과 무관하게 항상 숏 가능."""
+    try:
+        r = requests.get(f"{FAPI}/fapi/v1/exchangeInfo", timeout=15)
+        cands = sorted(set(s["symbol"].replace("USDT", "") for s in r.json()["symbols"]
+                           if s["symbol"].endswith("USDT") and s.get("status") == "TRADING"
+                           and s.get("contractType") == "PERPETUAL"))
+    except Exception as e:
+        log.warning(f"선물 심볼목록 조회 실패: {e}")
+        return []
+    if cands:
+        FUTURES_UNIVERSE_PATH.write_text("\n".join(cands), encoding="utf-8")
+        log.info(f"선물 유니버스 갱신: {len(cands)}개")
+    return cands
+
+
+def load_futures_tradeable():
+    try:
+        return set(c for c in FUTURES_UNIVERSE_PATH.read_text(encoding="utf-8").split() if c)
+    except Exception:
+        return set()
+
+
+FUTURES_UNIVERSE = load_futures_tradeable()   # 비면 main()의 첫 refresh가 채움
+
 
 def _load(p, d):
     try: return json.loads(Path(p).read_text(encoding="utf-8"))
@@ -166,21 +200,28 @@ def log_trade(row):
 
 
 def main():
-    global UNIVERSE
+    global UNIVERSE, FUTURES_UNIVERSE
     positions = _load(POS_PATH, {}); cooldown = {}
     last_refresh = 0.0
+    last_fut_refresh = 0.0
     last_capcfg_alert = 0.0   # ★ engine_caps_usdt 설정누락 알림 스팸방지용 타임스탬프
     api_fail = 0   # ★ 마진잔고 조회 연속실패 카운터 — IP차단 등으로 조용히 0 반환되는 걸 감지·알림
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
-    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인, 6h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
+    log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인 + 선물폴백 {len(FUTURES_UNIVERSE)}코인, "
+             f"6h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
              f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 {get_margin_usdt():.1f}")
-    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 6h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인")
+    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 6h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인+선물폴백")
     except Exception: pass
 
     while True:
         try:
             now = time.time()
+            # 선물 유니버스 주기 갱신 (마진 대출과 무관 — 상장폐지/신규상장 정도만 반영하면 됨)
+            if now - last_fut_refresh >= BORROWABLE_REFRESH_H * 3600:
+                last_fut_refresh = now
+                fresh_fut = refresh_futures_tradeable()
+                if fresh_fut: FUTURES_UNIVERSE = set(fresh_fut)
             # 대출가능 유니버스 주기 갱신 (재고가 수시로 바뀜 → 못 빌리는 코인에 주문 던지는 것 방지)
             if now - last_refresh >= BORROWABLE_REFRESH_H * 3600:
                 last_refresh = now
@@ -216,7 +257,13 @@ def main():
 
             # 1) 신호 탐지 — 6h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
             #    1차: 24h 변동률로 후보 추림(6h+40%면 24h도 최소 15%↑) → 2차: 후보만 5분봉으로 6h 정밀계산
-            for coin in UNIVERSE:
+            # ★ 2026-07-21: 대출가능(UNIVERSE) ∪ 선물상장(FUTURES_UNIVERSE) 전체 스캔.
+            #   대출가능하면 마진 우선(경제성 더 좋음, 백테스트 확인), 대출 안 되고 선물만 있으면 폴백.
+            UNIVERSE_SET = set(UNIVERSE)
+            fut_guard = BinanceGuard(FUTURES_ENGINE)
+            fut_cfg = load_futures_config()
+            fut_caps = fut_cfg.get("engine_caps_usdt", {})
+            for coin in (UNIVERSE_SET | FUTURES_UNIVERSE):
                 sym = f"{coin}USDT"
                 t = tick.get(sym)
                 if not t: continue
@@ -232,30 +279,55 @@ def main():
                 if px6 > 0: px = px6
                 ret2h = ret6h   # 기록용(6h 상승률)
                 vr = 0.0
-                # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 엔진 자체상한 초과 방지)
-                # ★ 2026-07-13 버그수정: global_cap_usdt(엔진 3개 합산 180)로 체크하고 있어서
-                #   mshort 혼자 180까지 쌓일 수 있었음(자기 엔진상한 100을 무시) → 자기 엔진상한으로 교체.
-                #   설정유효성(engine_caps_usdt에 ENGINE 존재하는지)은 루프 진입 전에 한 번만 확인함(위쪽).
-                if engine_caps is None:
-                    continue   # 설정오류로 이번 사이클은 신규진입 전면 스킵(알림은 위에서 사이클당 1회만 이미 보냄)
-                open_margin = sum(p["margin"] for p in positions.values())
-                ecap = engine_caps[ENGINE]
-                if open_margin + MARGIN_PER_TRADE > ecap:
-                    log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>엔진상한 {ecap}")
-                    continue
-                # 진입
-                margin = min(MARGIN_PER_TRADE, get_margin_usdt())
-                res = guard.open_short(coin, margin)
-                cooldown[sym] = now + COOLDOWN_H*3600
-                if res.get("live"):
-                    positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": res.get("price", px),
-                                      "qty": res["qty"], "margin": margin, "pump": round(ret2h,1), "vr": round(vr,1),
-                                      "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
-                    log.warning(f"★실전 마진숏 진입 {sym} 6h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
-                    try: notify.send(f"📉 마진숏 진입 {sym} 6h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
-                    except Exception: pass
+
+                use_margin = coin in UNIVERSE_SET
+                if use_margin:
+                    # 누적 노출 상한 확인 (48h 홀딩이라 동시다발 진입 가능 → 엔진 자체상한 초과 방지)
+                    # ★ 2026-07-13 버그수정: global_cap_usdt(엔진 3개 합산 180)로 체크하고 있어서
+                    #   mshort 혼자 180까지 쌓일 수 있었음(자기 엔진상한 100을 무시) → 자기 엔진상한으로 교체.
+                    #   설정유효성(engine_caps_usdt에 ENGINE 존재하는지)은 루프 진입 전에 한 번만 확인함(위쪽).
+                    if engine_caps is None:
+                        continue   # 설정오류로 이번 사이클은 신규진입 전면 스킵(알림은 위에서 사이클당 1회만 이미 보냄)
+                    open_margin = sum(p["margin"] for p in positions.values() if p.get("venue", "margin") == "margin")
+                    ecap = engine_caps[ENGINE]
+                    if open_margin + MARGIN_PER_TRADE > ecap:
+                        log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>엔진상한 {ecap}")
+                        continue
+                    margin = min(MARGIN_PER_TRADE, get_margin_usdt())
+                    res = guard.open_short(coin, margin)
+                    cooldown[sym] = now + COOLDOWN_H*3600
+                    if res.get("live"):
+                        positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": res.get("price", px),
+                                          "qty": res["qty"], "margin": margin, "venue": "margin",
+                                          "pump": round(ret2h,1), "vr": round(vr,1),
+                                          "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
+                        log.warning(f"★실전 마진숏 진입 {sym} 6h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
+                        try: notify.send(f"📉 마진숏 진입 {sym} 6h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
+                        except Exception: pass
+                    else:
+                        log.info(f"마진 진입 dry/실패 {sym}: {res}")
                 else:
-                    log.info(f"진입 dry/실패 {sym}: {res}")
+                    # ★ 선물 폴백: 마진 대출재고 없는 코인(BANK·ACE류) 전용. FUTURES_ENGINE 미설정/미arm이면 자동 dry.
+                    if FUTURES_ENGINE not in fut_caps:
+                        continue   # 선물폴백 미설정 — 조용히 스킵(마진과 별개 기능이라 사이클마다 알림 안 보냄)
+                    open_fut = sum(p["margin"] for p in positions.values() if p.get("venue") == "futures")
+                    fcap = fut_caps[FUTURES_ENGINE]
+                    if open_fut + MARGIN_PER_TRADE > fcap:
+                        log.info(f"선물폴백 진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_fut:.0f}+{MARGIN_PER_TRADE:.0f}>엔진상한 {fcap}")
+                        continue
+                    margin = min(MARGIN_PER_TRADE, get_futures_usdt())
+                    res = fut_guard.open_short_futures(coin, margin)
+                    cooldown[sym] = now + COOLDOWN_H*3600
+                    if res.get("live"):
+                        positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": res.get("price", px),
+                                          "qty": res["qty"], "margin": margin, "venue": "futures",
+                                          "pump": round(ret2h,1), "vr": round(vr,1),
+                                          "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
+                        log.warning(f"★실전 선물숏 진입(마진대출폴백) {sym} 6h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
+                        try: notify.send(f"📉 선물숏 진입(마진폴백) {sym} 6h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
+                        except Exception: pass
+                    else:
+                        log.info(f"선물 진입 dry/실패 {sym}: {res}")
 
             # 2) 청산: 40% 스탑(가격이 진입가+40% 상승 = 숏 손실) OR 48h 만기
             for sym in list(positions.keys()):
@@ -266,27 +338,36 @@ def main():
                 if not stop_hit and now < pos["exit_ts"]:
                     continue
                 reason = f"스탑+{STOP_PCT:.0f}%" if stop_hit else f"{HOLD_H}h만기"
-                cres = guard.close_short(pos["coin"])
+                venue = pos.get("venue", "margin")   # 옛 포지션(필드 없음) = 마진으로 취급(원래 유일 경로였음)
+                if venue == "futures":
+                    cres = fut_guard.close_short_futures(pos["coin"])
+                    lev = load_futures_config().get("leverage", 2)
+                    venue_tag = "선물"
+                else:
+                    cres = guard.close_short(pos["coin"])
+                    lev = load_config().get("leverage", 2)
+                    venue_tag = "마진"
                 # ★ 실전 포지션은 실제 청산(live) 확인 전엔 로컬에서 지우지 않음.
                 #   과거 버그: 청산주문이 실패(API장애·IP차단 등)해도 무조건 positions에서 삭제해
                 #   실제 거래소엔 레버리지 숏이 그대로 열려있는데 봇은 더 이상 스탑/만기를 감시 안 함.
                 if pos["live"] and not cres.get("live"):
                     fails = pos.get("close_fails", 0) + 1
                     pos["close_fails"] = fails
-                    log.error(f"★청산 실패(포지션 유지, 다음루프 재시도) {sym} {reason} → {cres} (연속{fails}회)")
+                    log.error(f"★{venue_tag}청산 실패(포지션 유지, 다음루프 재시도) {sym} {reason} → {cres} (연속{fails}회)")
                     if fails in (1, 3) or fails % 10 == 0:
-                        try: notify.send(f"🚨 마진숏 청산 실패 {sym} {reason} → {cres} (연속{fails}회) — 실거래소엔 포지션 열려있음! 확인 필요")
+                        try: notify.send(f"🚨 {venue_tag}숏 청산 실패 {sym} {reason} → {cres} (연속{fails}회) — 실거래소엔 포지션 열려있음! 확인 필요")
                         except Exception: pass
                     continue
                 pnl_pct = (1 - px/pos["entry_price"])*100
-                pnl_usdt = pos["margin"] * load_config().get("leverage",2) * (pnl_pct/100)
-                if pos["live"]: guard.record_realized(pnl_usdt)
+                pnl_usdt = pos["margin"] * lev * (pnl_pct/100)
+                if pos["live"]:
+                    (fut_guard if venue == "futures" else guard).record_realized(pnl_usdt)
                 log_trade(dict(entry_time=pos["entry_iso"], exit_time=datetime.now(KST).isoformat(), symbol=sym,
                                pump_2h=pos["pump"], vol_mult=pos["vr"], entry_price=pos["entry_price"], exit_price=px,
                                margin_usdt=pos["margin"], pnl_pct=round(pnl_pct,2), pnl_usdt=round(pnl_usdt,2),
-                               live=pos["live"], reason=reason))
-                log.warning(f"★마진숏 청산 {sym} @{px:g} {reason} pnl={pnl_pct:+.2f}%({pnl_usdt:+.2f}USDT) → {cres.get('live') and '실청산' or cres}")
-                try: notify.send(f"📈 마진숏 청산 {sym} {reason} pnl={pnl_pct:+.1f}% ({pnl_usdt:+.1f}USDT)")
+                               live=pos["live"], reason=f"{reason}[{venue_tag}]"))
+                log.warning(f"★{venue_tag}숏 청산 {sym} @{px:g} {reason} pnl={pnl_pct:+.2f}%({pnl_usdt:+.2f}USDT) → {cres.get('live') and '실청산' or cres}")
+                try: notify.send(f"📈 {venue_tag}숏 청산 {sym} {reason} pnl={pnl_pct:+.1f}% ({pnl_usdt:+.1f}USDT)")
                 except Exception: pass
                 del positions[sym]
 
