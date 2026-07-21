@@ -167,10 +167,56 @@ def enter(coin: str, margin_usdt: float = None) -> str:
 
     mode = "🔴 실전" if is_live else "🔵 모의(dry)"
     return (f"{mode} 재량롱 진입 {coin} @{entry_price:,.6g} ({margin_usdt:.0f}USDT 증거금)\n"
-            f"실측변동성(일봉20일): {vol_pct:.2f}%\n"
-            f"손절: -{sl_pct:.1f}% (@{positions[coin]['stop_price']:,.6g}, 가격 떨어지면 손절)\n"
-            f"트레일: +{arm_pct:.1f}% 도달 시 무장 → 고점대비 -{trail_pct:.1f}% 하락하면 청산\n"
-            f"익절 상한 없음 — 오르는 만큼 트레일로 따라감")
+            f"손절: -{sl_pct:.1f}% (@{positions[coin]['stop_price']:,.6g})\n"
+            f"트레일: +{arm_pct:.1f}% 도달 시 무장 → 고점대비 -{trail_pct:.1f}%\n"
+            f"실측변동성(일봉20일): {vol_pct:.2f}%")
+
+
+def add_to_position(coin: str, margin_usdt: float) -> str:
+    """기존 보유 포지션에 추가매수(불타기). 손절가는 유지(A안, 2026-07-21) — 리스크를 넓히지 않고
+    진입가만 물량가중평균으로 재계산. 새 평단 기준으로는 손절폭이 자동으로 더 타이트해짐(방어적)."""
+    coin = coin.upper().strip()
+    sym = f"{coin}USDT"
+
+    positions = _load_positions()
+    if coin not in positions:
+        return f"⚠️ {coin} 보유 포지션 없음 — 먼저 enter()로 진입"
+    pos = positions[coin]
+    if not pos.get("live"):
+        return f"⚠️ {coin}은 모의(dry) 포지션 — 추가매수는 실전 포지션만 지원"
+
+    open_margin = sum(p["margin_usdt"] for p in positions.values() if p.get("live"))
+    engine_caps = load_config().get("engine_caps_usdt", {})
+    ecap = engine_caps.get(ENGINE)
+    if ecap is None:
+        return f"🚨 설정오류: engine_caps_usdt에 {ENGINE} 없음"
+    if open_margin + margin_usdt > ecap:
+        return f"⚠️ {coin} 추가매수 보류 — 누적노출 {open_margin:.0f}+{margin_usdt:.0f} > 엔진상한 {ecap}"
+
+    guard = MarginGuard(ENGINE)
+    res = guard.open_long(coin, margin_usdt)
+    if not res.get("live"):
+        return f"❌ {coin} 추가매수 실패/차단: {res}"
+
+    add_qty = res["qty"]
+    add_price = res["price"]
+    old_qty, old_entry = pos["qty"], pos["entry_price"]
+    new_qty = old_qty + add_qty
+    new_avg_entry = (old_qty * old_entry + add_qty * add_price) / new_qty
+
+    pos["entry_price"] = new_avg_entry
+    pos["qty"] = new_qty
+    pos["margin_usdt"] = pos["margin_usdt"] + margin_usdt
+    pos["peak_price"] = max(pos["peak_price"], add_price)
+    # stop_price 의도적으로 유지 — 추가매수로 손절가를 넓히지 않음(A안)
+    positions[coin] = pos
+    _save_positions(positions)
+    log.warning(f"재량롱 추가매수 {coin} +{add_qty}@{add_price:,.6g} margin+{margin_usdt:.0f} "
+                f"(누적증거금{pos['margin_usdt']:.0f} 신규평단{new_avg_entry:,.6g} 손절가유지{pos['stop_price']:,.6g})")
+    return (f"🔴 실전 재량롱 추가매수 {coin} +{margin_usdt:.0f}USDT @{add_price:,.6g}\n"
+            f"신규 평단: {new_avg_entry:,.6g} (기존 {old_entry:,.6g})\n"
+            f"누적 증거금: {pos['margin_usdt']:.0f}USDT\n"
+            f"손절가 유지: {pos['stop_price']:,.6g} (추가매수로 안 넓힘)")
 
 
 def check_positions() -> list:
