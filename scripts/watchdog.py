@@ -82,7 +82,9 @@ BOTS = {
     # 35초마다 재시작되며 텔레그램 재시작 알림 스팸 — 원인 진단 후 복구.
     # "quiet_accum_screener":  ROOT / "scripts" / "quiet_accum_screener.py",   # #47 조용한 매집 스크리너 (거래대금상위+안오름+OFI매수우위 겹침, 순수로깅·매매0)
     "breadth_monitor":       ROOT / "scripts" / "breadth_monitor.py",       # 시장전체 로테이션(breadth) 배경모니터 (순수로깅·매매0, 매수신호 아님)
-    "whale_print_paper_trader": ROOT / "scripts" / "whale_print_paper_trader.py",  # #49 고래발자국(바닥권) 반응 모의매매 (순수모의·매매0)
+    # "whale_print_paper_trader" 은퇴 (2026-07-21): forward 1,733건 재판정 결과 day-clustered t-4.57,
+    # 비용후 평균-0.85% — 통계적 확정손실. 원 가설(BLUR n=1) 반증됨. STRATEGY.md 참조.
+    # "whale_print_paper_trader": ROOT / "scripts" / "whale_print_paper_trader.py",  # #49 고래발자국(바닥권) 반응 모의매매 (순수모의·매매0)
 }
 
 
