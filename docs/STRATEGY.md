@@ -1250,3 +1250,8 @@ API실패 시 포지션0과 구분 안 되던 것(None 반환으로 수정, marg
 **배포**: `data/binance_live_config.json`에 mshort_fut 캡(50USDT) 정의만 추가, **armed_engines엔
 아직 미포함**(안전하게 dry로만 우선 동작, 실거래 전환은 별도 확인 후). 봇 재시작(포지션 0건 확인 후)
 → 선물유니버스 530개 정상 조회, 에러 없이 첫 루프 사이클 통과 확인.
+
+**실거래 전환 (2026-07-21)**: dry 무사고 관찰 후 사용자 확인받아 armed_engines에 mshort_fut 추가.
+`binance_guard.load_config()`가 매 호출마다 파일을 새로 읽는 구조라(캐싱 없음) 실행 중이던
+margin_short_trader 프로세스 재시작 없이 다음 신호 체크 주기부터 바로 실거래 반영됨(config 재로딩
+확인 완료). 50 USDT 캡, 대출가능 코인은 여전히 마진 우선.
