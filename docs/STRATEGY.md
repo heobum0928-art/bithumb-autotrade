@@ -1355,3 +1355,41 @@ manualshort의 캡(150→110)에서 재배분** — 계정 전체 리스크 한�
 **조치**: `whale_print_paper_trader.py` 신규 진입 로직 중단 대상으로 표시(watchdog에서 제거는 다음
 정리 시점에). 원래 순수 로깅이었던 `orderflow_logger.py`의 고래발자국 이벤트 기록 자체는 유지(다른
 용도로 참고 가능, 매매 연결만 끊음).
+
+### ★★ 크로스마진 계좌 공유 버그 — mshort 신규진입 무음 실패 (2026-07-22)
+ETH 재량롱 200USDT 추가매수(불타기) 이후 계좌 점검 중 발견. **롱(manuallong, USDT 차입)과 숏
+(mshort/rsishort, 코인 차입)이 같은 바이낸스 크로스마진 계좌를 공유**하는데, manuallong이 USDT를
+199USDT어치 빌리면서 계좌 전체 USDT 순자산(`get_margin_usdt()`)이 **-196.89로 마이너스**가 됨.
+
+`margin_short_trader.py`·`rsi_extreme_short_paper.py`가 신규진입 증거금을 `min(고정금액,
+get_margin_usdt())`로 정하다 보니, 마이너스 잔고가 그대로 증거금으로 선택돼 `notional`이 음수가
+되고 `open_short()` 내부의 **로그 없는 조용한 실패 경로**(가격조회실패/notional<최소주문/수량0)로
+빠짐. **실제 피해**: mshort(유일 실전검증 전략)가 2026-07-21 22:42 ONEUSDT 신호를 놓침(`명목
+-393.8 < 최소주문 5.0`), rsishort가 07-22 03:54 FILUSDT 신호를 놓침. 게다가 이 마이너스 잔고를
+헬스체크가 "IP차단 의심"으로 오진해 07-21 14:34부터 **216회 연속** 잘못된 경고를 보냄(18시간+).
+
+**검증 절차**: 에이전트 3팀 논의(구현안/레드팀/재발방지) — 레드팀이 "잔고체크를 완전히 없애면
+계좌 마진레벨이 위험 수준까지 나빠져도 진입을 계속 시도하게 되고, 이걸 알아챌 유일한 창구(헬스체크)
+마저 이번 수정으로 은폐된다"는 실질적 위험을 지적, marginLevel 기반 별도 안전장치 보완을 요구.
+코드리뷰 훅도 편집 과정에서 6차례 연속 지적(marginLevel FAIL-OPEN 무음/get_borrowed 조회실패와
+진짜0 미구분/close_short·close_long 호출부 None 미처리/open_long·선물숏 로깅 비대칭) — 전부 반영.
+
+**수정 내용**:
+1. `bithumb/margin_guard.py`: `MarginGuard._gate()`에 **marginLevel 기반 단일 관문 체크 신설**
+   (모든 엔진이 여기를 거치므로 새 엔진 추가돼도 자동 상속 — 재발방지 설계 3팀 권고 반영).
+   `get_margin_level()` 신설(marginLevel<1.5면 신규진입 차단, 조회실패는 FAIL-OPEN하되 log.error로
+   추적 가능하게 — 마진콜 방지의 최종 보루는 결국 바이낸스 자체 로직이라는 판단).
+2. `get_margin_usdt/get_borrowed/get_held` — 조회실패 시 로그레벨 warning→error 통일, `get_borrowed`
+   `get_held`는 **API실패(None)와 진짜 대출/보유 0(0.0)을 구분**(binance_guard.py `get_futures_position()`
+   의 기존 안전패턴과 동일) — `close_short/close_long`도 None 케이스를 명시 처리하도록 함께 수정.
+3. `open_short/open_long`(margin_guard.py), `open_short_futures`(binance_guard.py) — 조용히 실패하던
+   3개 분기(가격조회실패/notional<최소주문/수량0) 전부에 `log.error` 추가.
+4. `margin_short_trader.py`·`rsi_extreme_short_paper.py` — 신규진입 사이징에서 `get_margin_usdt()`
+   /`get_futures_usdt()` 참조 제거, `MARGIN_PER_TRADE` 고정값만 사용(진짜 잔고부족은 거래소가
+   API레벨에서 거부, 이미 로그됨). 마진숏 헬스체크는 `bal==0.0`(API실패 추정)만 "IP차단 의심"으로
+   알리고, `bal<0`(정상, 타 엔진 차입)은 1회성 안내로 분리해 스팸 재발 방지.
+
+**검증**: 수정 후 `MarginGuard('mshort')._gate(100)` → `(True, 'OK')` 확인(계좌 순자산 -196.89인
+상태에서도 정상 통과, marginLevel 2.40 기준). rsishort·manuallong도 동일 확인.
+
+**영향받은 실제 자금**: 0원(주문 자체가 안 나갔을 뿐, 잘못된 거래는 없었음) — 놓친 기회비용만 발생.

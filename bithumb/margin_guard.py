@@ -181,34 +181,58 @@ def get_margin_usdt() -> float:
                 if a["asset"] == "USDT":
                     return float(a["netAsset"])
     except Exception as e:
-        log.warning(f"마진잔고 조회실패: {e}")
+        log.error(f"마진잔고 조회실패: {e}")
     return 0.0
 
 
-def get_borrowed(coin) -> float:
-    """해당 코인의 현재 대출(빌린) 수량 — 숏 포지션 크기."""
+def get_margin_level() -> float:
+    """계좌 전체 담보비율(marginLevel) — 롱/숏 엔진이 계좌를 공유하므로 신규진입 안전판으로 사용.
+    ★ 조회 실패 시 의도적으로 FAIL-OPEN(999.0, 무제한 취급) — 이 값 하나가 -gate()의 유일한
+    안전장치가 아니라 기존 4중 관문(cap·daily_loss_limit 등) 위에 얹은 보조 방어선이고,
+    실제 청산 방지는 결국 바이낸스 자체 마진콜 로직이 최종 보루이기 때문. 대신 여기서
+    조용히 넘어가지 않도록 log.error로 남겨 추적 가능하게 함(get_margin_usdt()의 같은
+    실패 경로가 IP차단으로 오진됐던 사례 재발 방지 — 여긴 별도 태그로 구분)."""
+    try:
+        r = _signed("GET", "/sapi/v1/margin/account")
+        if r.status_code == 200:
+            return float(r.json().get("marginLevel", 999))
+        log.error(f"마진레벨 조회 실패(status={r.status_code}) — FAIL-OPEN(999)으로 진행, 원인 확인 필요")
+    except Exception as e:
+        log.error(f"마진레벨 조회 예외({e}) — FAIL-OPEN(999)으로 진행, 원인 확인 필요")
+    return 999.0
+
+
+def get_borrowed(coin) -> float | None:
+    """해당 코인의 현재 대출(빌린) 수량 — 숏 포지션 크기.
+    ★ API실패/예외 시 None 반환(0.0과 구분) — get_futures_position()과 동일 안전패턴.
+    호출부(close_short)에서 "진짜 대출 0(청산완료)"과 "조회실패(청산보류해야함)"를 구분해야 함."""
     try:
         r = _signed("GET", "/sapi/v1/margin/account")
         if r.status_code == 200:
             for a in r.json().get("userAssets", []):
                 if a["asset"] == coin:
                     return float(a["borrowed"]) + float(a["interest"])
+            return 0.0   # 목록에 없음 = 진짜 대출 0(정상)
+        log.error(f"대출조회 실패(status={r.status_code})")
     except Exception as e:
-        log.warning(f"대출조회 실패: {e}")
-    return 0.0
+        log.error(f"대출조회 실패: {e}")
+    return None
 
 
-def get_held(coin) -> float:
-    """해당 코인의 현재 보유(매수한, 자유잔고) 수량 — 롱 포지션 크기. get_borrowed()의 롱 버전."""
+def get_held(coin) -> float | None:
+    """해당 코인의 현재 보유(매수한, 자유잔고) 수량 — 롱 포지션 크기. get_borrowed()의 롱 버전.
+    ★ API실패/예외 시 None 반환(0.0과 구분) — 위와 동일 이유."""
     try:
         r = _signed("GET", "/sapi/v1/margin/account")
         if r.status_code == 200:
             for a in r.json().get("userAssets", []):
                 if a["asset"] == coin:
                     return float(a["free"])
+            return 0.0   # 목록에 없음 = 진짜 보유 0(정상)
+        log.error(f"보유조회 실패(status={r.status_code})")
     except Exception as e:
-        log.warning(f"보유조회 실패: {e}")
-    return 0.0
+        log.error(f"보유조회 실패: {e}")
+    return None
 
 
 def live_status():
@@ -251,6 +275,12 @@ class MarginGuard:
             _release_lock(lock_path)
         if s["realized_pnl_today"] <= -abs(cfg.get("daily_loss_limit_usdt", 0)):
             return False, f"일일손실한도 도달({s['realized_pnl_today']:.2f})"
+        # ★ 2026-07-22: 계좌를 롱/숏 엔진이 공유해서 한쪽이 크게 차입하면 담보비율이 나빠질 수 있음.
+        #   신규진입 전 모든 엔진 공통으로 여기서 한 번 확인(단일 관문) — 청산위험(통상 1.1 부근) 대비
+        #   여유를 두고 1.5 미만이면 신규진입 차단(기존 포지션엔 영향 없음, 청산 자체는 거래소가 별도 처리).
+        margin_level = get_margin_level()
+        if margin_level < 1.5:
+            return False, f"계좌 담보비율 낮음(marginLevel={margin_level:.2f}<1.5) — 신규진입 보류"
         return True, "OK"
 
     def _ledger(self, action, sym, qty, result):
@@ -276,14 +306,17 @@ class MarginGuard:
         sym = f"{coin}USDT"
         price = _price(sym)
         if price <= 0:
+            log.error(f"[{self.engine}] ★숏진입 실패 {sym} — 가격조회 실패(price<=0)")
             return {"error": "price 실패"}
         lev = cfg.get("leverage", 2)
         notional = margin_usdt * lev
         step, minn = _symbol_filters(sym)
         if notional < minn:
+            log.error(f"[{self.engine}] ★숏진입 실패 {sym} — 명목 {notional:.1f} < 최소주문 {minn}(증거금{margin_usdt:.2f}×{lev}배)")
             return {"error": f"명목 {notional:.1f} < 최소주문 {minn}"}
         qty = _round_step(notional / price, step)
         if qty <= 0:
+            log.error(f"[{self.engine}] ★숏진입 실패 {sym} — 반올림후 수량0(notional={notional:.2f} price={price})")
             return {"error": "수량 0"}
         # 시장가 매도 + 자동 borrow
         try:
@@ -312,6 +345,8 @@ class MarginGuard:
             return {"dry": True}
         sym = f"{coin}USDT"
         borrowed = get_borrowed(coin)
+        if borrowed is None:
+            return {"error": "대출조회 실패(API) — 청산 보류, 다음 재시도"}
         if borrowed <= 0:
             return {"error": "대출수량 0(청산할 숏 없음)"}
         step, _ = _symbol_filters(sym)
@@ -346,14 +381,17 @@ class MarginGuard:
         sym = f"{coin}USDT"
         price = _price(sym)
         if price <= 0:
+            log.error(f"[{self.engine}] ★롱진입 실패 {sym} — 가격조회 실패(price<=0)")
             return {"error": "price 실패"}
         lev = cfg.get("leverage", 2)
         notional = margin_usdt * lev
         step, minn = _symbol_filters(sym)
         if notional < minn:
+            log.error(f"[{self.engine}] ★롱진입 실패 {sym} — 명목 {notional:.1f} < 최소주문 {minn}(증거금{margin_usdt:.2f}×{lev}배)")
             return {"error": f"명목 {notional:.1f} < 최소주문 {minn}"}
         qty = _round_step(notional / price, step)
         if qty <= 0:
+            log.error(f"[{self.engine}] ★롱진입 실패 {sym} — 반올림후 수량0(notional={notional:.2f} price={price})")
             return {"error": "수량 0"}
         # 시장가 매수 + 자동 borrow(USDT 부족분)
         try:
@@ -383,6 +421,8 @@ class MarginGuard:
             return {"dry": True}
         sym = f"{coin}USDT"
         held = get_held(coin)
+        if held is None:
+            return {"error": "보유조회 실패(API) — 청산 보류, 다음 재시도"}
         if held <= 0:
             return {"error": "보유수량 0(청산할 롱 없음)"}
         step, _ = _symbol_filters(sym)

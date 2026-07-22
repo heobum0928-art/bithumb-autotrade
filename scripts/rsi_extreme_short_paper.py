@@ -214,7 +214,11 @@ def main():
                 if open_margin > 0:
                     log.info(f"진입 보류 {sym}(RSI{rsi:.0f}): 이미 실전포지션 {open_margin:.0f}USDT 열려있음(상한 {MARGIN_PER_TRADE:.0f})")
                     continue
-                margin = min(MARGIN_PER_TRADE, get_margin_usdt())
+                # ★ 2026-07-22: margin_short_trader.py와 동일 버그 수정 — get_margin_usdt()(계좌 전체
+                #   USDT 순자산)로 min() 클램프하던 걸 제거. manuallong 등 타 엔진이 USDT를 정상
+                #   차입하면 이 값이 마이너스가 될 수 있는데, min()이 그대로 골라 조용히 진입 실패했음
+                #   (실제로 FILUSDT 신호를 이렇게 놓침). 진짜 잔고부족은 바이낸스가 API에서 거부.
+                margin = MARGIN_PER_TRADE
                 res = guard.open_short(coin, margin)
                 cooldown[sym] = now + COOLDOWN_H*3600
                 live = bool(res.get("live"))

@@ -358,14 +358,17 @@ class BinanceGuard:
         sym = f"{coin}USDT"
         price = _mark_price(sym)
         if price <= 0:
+            log.error(f"[{self.engine}] ★선물숏진입 실패 {sym} — 가격조회 실패(price<=0)")
             return {"error": "price 실패"}
         lev = cfg.get("leverage", 2)
         notional = margin_usdt * lev
         step, minn = _symbol_filters_futures(sym)
         if notional < minn:
+            log.error(f"[{self.engine}] ★선물숏진입 실패 {sym} — 명목 {notional:.1f} < 최소주문 {minn}(증거금{margin_usdt:.2f}×{lev}배)")
             return {"error": f"명목 {notional:.1f} < 최소주문 {minn}"}
         qty = _round_step(notional / price, step)
         if qty <= 0:
+            log.error(f"[{self.engine}] ★선물숏진입 실패 {sym} — 반올림후 수량0(notional={notional:.2f} price={price})")
             return {"error": "수량 0"}
         try:
             _signed("POST", "/fapi/v1/leverage", {"symbol": sym, "leverage": int(lev)})
