@@ -70,6 +70,8 @@ MARGIN_PER_TRADE = 100.0  # 증거금(상한과 동일). 실제 사용은 min(�
 BUF_PATH = ROOT / "data" / "margin_short_buf.json"
 POS_PATH = ROOT / "data" / "margin_short_pos.json"
 TRADES_PATH = ROOT / "data" / "margin_short_trades.csv"
+COOLDOWN_PATH = ROOT / "data" / "margin_short_cooldown.json"  # ★ 2026-07-22(감사 발견): 재시작 시
+# cooldown이 메모리 전용이라 초기화되던 문제 — positions와 동일하게 디스크 영속화.
 
 # 유니버스: 바이낸스 마진 대출가능 코인 전체 (2026-07-11 확장 — 빗썸 교집합 제한 제거)
 # ★ 발견1: 백테스트 314개 중 실제 빌릴 수 있는 건 절반뿐(급등 소형알트는 대출재고 없어 -3045 거부).
@@ -201,7 +203,10 @@ def log_trade(row):
 
 def main():
     global UNIVERSE, FUTURES_UNIVERSE
-    positions = _load(POS_PATH, {}); cooldown = {}
+    positions = _load(POS_PATH, {})
+    cooldown = _load(COOLDOWN_PATH, {})
+    now0 = time.time()
+    cooldown = {k: v for k, v in cooldown.items() if v > now0}   # 만료된 항목 정리(파일 무한증가 방지)
     last_refresh = 0.0
     last_fut_refresh = 0.0
     last_capcfg_alert = 0.0   # ★ engine_caps_usdt 설정누락 알림 스팸방지용 타임스탬프
@@ -209,9 +214,11 @@ def main():
     neg_balance_notified = False   # ★ 2026-07-22: 계좌 USDT 순자산이 마이너스(타 엔진 정상 차입)일 때 1회성 알림용
     ls = live_status()
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
+    _bal0 = get_margin_usdt()
     log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인 + 선물폴백 {len(FUTURES_UNIVERSE)}코인, "
              f"6h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
-             f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 {get_margin_usdt():.1f}")
+             f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 "
+             f"{'조회실패' if _bal0 is None else f'{_bal0:.1f}'}")
     try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 6h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인+선물폴백")
     except Exception: pass
 
@@ -231,18 +238,17 @@ def main():
             tick = all_tickers()
             guard = MarginGuard(ENGINE)
 
-            # ★ 마진잔고 헬스체크 — get_margin_usdt()가 API장애 시 조용히 0.0을 반환하는 문제(오늘 IP차단 사건)
-            #   감지: 연속 실패 시 알림, 복구 시 알림. (진짜 잔고 0은 300USDT 운용 규모상 사실상 안 일어남)
-            # ★ 2026-07-22: bal<0은 API장애가 아니라 manuallong 등 타 엔진이 USDT를 정상 차입한 결과일 수
-            #   있음(계좌 공유) — 이걸 "IP차단 의심"으로 오진해 216회 연속 잘못된 알림을 보낸 사건 발생.
-            #   API장애(bal==0.0 정확히)와 정상 마이너스(타 엔진 차입)를 분리. 신규진입 사이징은 더 이상
-            #   이 잔고에 의존하지 않음(MARGIN_PER_TRADE 고정값 사용, 아래 참조) — 여긴 순수 관측용.
+            # ★ 마진잔고 헬스체크. 2026-07-22: get_margin_usdt()가 이제 API실패 시 None(0.0과 구분)을
+            #   반환하도록 수정됨 — 예전엔 이 함수가 실패해도 조용히 0.0을 반환해 "마이너스 잔고(타 엔진
+            #   정상 차입)"와 "진짜 API장애"를 구분 못 하고 216회 연속 "IP차단 의심" 오진 알림을 보낸 사건
+            #   있었음. 이제 None 자체로 명확히 구분. 신규진입 사이징은 더 이상 이 잔고에 의존하지 않음
+            #   (MARGIN_PER_TRADE 고정값 사용, 아래 참조) — 여긴 순수 관측용.
             bal = get_margin_usdt()
-            if bal == 0.0:
+            if bal is None:
                 api_fail += 1
                 if api_fail in (2, 6) or api_fail % 12 == 0:
-                    log.error(f"마진잔고 0/조회실패 {api_fail}회 연속 — IP차단·API권한 문제 의심")
-                    try: notify.send(f"🚨 마진숏봇: 마진잔고 {api_fail}회 연속 0/조회실패 — IP차단 등 API 문제 의심, 확인 필요")
+                    log.error(f"마진잔고 조회 {api_fail}회 연속 실패 — API장애 의심(자세한 원인은 margin_guard.log 참조)")
+                    try: notify.send(f"🚨 마진숏봇: 마진잔고 조회 {api_fail}회 연속 실패 — API 문제 의심, 확인 필요")
                     except Exception: pass
             else:
                 if api_fail >= 2:
@@ -302,15 +308,19 @@ def main():
                         continue   # 설정오류로 이번 사이클은 신규진입 전면 스킵(알림은 위에서 사이클당 1회만 이미 보냄)
                     open_margin = sum(p["margin"] for p in positions.values() if p.get("venue", "margin") == "margin")
                     ecap = engine_caps[ENGINE]
-                    if open_margin + MARGIN_PER_TRADE > ecap:
-                        log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{MARGIN_PER_TRADE:.0f}>엔진상한 {ecap}")
+                    # ★ 2026-07-22: MARGIN_PER_TRADE를 ecap과 무관한 고정값으로 그대로 쓰면, 나중에 누가
+                    #   engine_caps_usdt.mshort를 100 미만으로 바꿀 경우 선물폴백(fcap=50)때와 똑같이
+                    #   이 분기가 영원히 막히는 버그가 재발할 수 있음 — 항상 ecap 기준으로 클램프.
+                    trade_margin = min(MARGIN_PER_TRADE, ecap)
+                    if open_margin + trade_margin > ecap:
+                        log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{trade_margin:.0f}>엔진상한 {ecap}")
                         continue
                     # ★ 2026-07-22: get_margin_usdt()(계좌 전체 USDT 순자산)로 min() 클램프하던 걸 제거.
                     #   manuallong 등 타 엔진이 USDT를 정상 차입하면 이 값이 마이너스가 될 수 있는데,
                     #   min()이 그 마이너스를 그대로 골라 notional이 음수가 되고 조용히 진입 실패하는
                     #   버그가 있었음(실제로 ONEUSDT 신호를 이렇게 놓침). 진짜 잔고부족은 바이낸스가
                     #   API 레벨에서 거부하며 이미 로그·원장기록됨 — 여기선 고정금액만 사용.
-                    margin = MARGIN_PER_TRADE
+                    margin = trade_margin
                     res = guard.open_short(coin, margin)
                     cooldown[sym] = now + COOLDOWN_H*3600
                     if res.get("live"):
@@ -329,14 +339,20 @@ def main():
                         continue   # 선물폴백 미설정 — 조용히 스킵(마진과 별개 기능이라 사이클마다 알림 안 보냄)
                     open_fut = sum(p["margin"] for p in positions.values() if p.get("venue") == "futures")
                     fcap = fut_caps[FUTURES_ENGINE]
-                    if open_fut + MARGIN_PER_TRADE > fcap:
-                        log.info(f"선물폴백 진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_fut:.0f}+{MARGIN_PER_TRADE:.0f}>엔진상한 {fcap}")
+                    # ★ 2026-07-22 발견(사용자 지적): MARGIN_PER_TRADE(마진용 100)를 선물폴백 사이징에도
+                    #   그대로 써서 fcap(mshort_fut 캡 50)보다 항상 커, 이 분기가 구조적으로 절대 통과할
+                    #   수 없었음 — ERAUSDT가 07-21 10:26~15:40 5시간+ 동안 6h+40~85%로 계속 신호를
+                    #   냈는데도 매번 "누적노출 0+100>엔진상한 50"으로 전부 놓침(mshort 실전 0건의
+                    #   핵심 원인). 선물폴백 전용 사이징을 fcap 기준으로 별도 계산.
+                    fut_margin = min(MARGIN_PER_TRADE, fcap)
+                    if open_fut + fut_margin > fcap:
+                        log.info(f"선물폴백 진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_fut:.0f}+{fut_margin:.0f}>엔진상한 {fcap}")
                         continue
                     # ★ 2026-07-22: 마진 경로와 동일 이유로 get_futures_usdt() min() 클램프 제거.
                     #   선물지갑은 manuallong과 무관한 별도 지갑이라 마이너스가 될 일은 없지만, API
                     #   실패 시 0.0을 반환하는 동일 패턴이 있어 똑같이 조용한 실패로 이어질 수 있었음.
                     #   진짜 잔고부족은 open_short_futures() 내부에서 거래소가 거부하며 로그됨.
-                    margin = MARGIN_PER_TRADE
+                    margin = fut_margin
                     res = fut_guard.open_short_futures(coin, margin)
                     cooldown[sym] = now + COOLDOWN_H*3600
                     if res.get("live"):
@@ -393,6 +409,13 @@ def main():
                 del positions[sym]
 
             _save(POS_PATH, positions)
+            # ★ 2026-07-22(감사 발견): cooldown이 메모리 전용이라 재시작 시 초기화 → 청산 직후 재시작되면
+            #   12h 재진입 쿨다운 없이 즉시 재진입 가능했음. positions와 동일하게 매 사이클 디스크 영속화
+            #   + 만료분은 저장 전에 정리(파일 무한증가 방지).
+            # 참고: 이 정리는 파일 용량 관리를 위한 하우스키핑일 뿐 — 실제 쿨다운 적용 여부는
+            # 신호탐지 루프에서 이번 사이클의 now로 이미 판정 끝남(cooldown.get(sym,0) > now), 무관.
+            cooldown = {k: v for k, v in cooldown.items() if v > time.time()}
+            _save(COOLDOWN_PATH, cooldown)
         except Exception as e:
             log.error(f"루프오류: {e}")
         time.sleep(POLL_SEC)

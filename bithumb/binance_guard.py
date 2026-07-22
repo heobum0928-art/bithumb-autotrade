@@ -387,9 +387,12 @@ class BinanceGuard:
             self._ledger("open_short_fut", qty, notional, f"ERR:{e}")
             return {"error": str(e)}
         fill_qty = float(res.get("executedQty", qty))
-        log.warning(f"[{self.engine}] ★선물숏진입(마진대출폴백) {sym} {fill_qty} (명목 {notional:.1f} USDT) @~{price:.6g}")
+        # ★ 2026-07-22(감사 발견, margin_guard.py open_short와 동일 수정): 선물 시장가 주문 응답의
+        #   avgPrice(실제 평균체결가)를 우선 사용, 없거나 0이면 호가로 폴백.
+        fill_price = float(res.get("avgPrice", 0) or 0) or price
+        log.warning(f"[{self.engine}] ★선물숏진입(마진대출폴백) {sym} {fill_qty} (명목 {notional:.1f} USDT) @~{fill_price:.6g}(호가{price:.6g})")
         self._ledger("open_short_fut", fill_qty, notional, res)
-        return {"live": True, "qty": fill_qty, "entry_usdt": margin_usdt, "price": price, "result": res}
+        return {"live": True, "qty": fill_qty, "entry_usdt": margin_usdt, "price": fill_price, "result": res}
 
     def close_short_futures(self, coin: str) -> dict:
         """선물 숏 청산 — 현재 포지션 수량만큼 시장가 매수(BUY)로 반대매매."""

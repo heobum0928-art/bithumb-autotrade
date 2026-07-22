@@ -173,16 +173,23 @@ def _round_step_up(qty, step):
     return round(steps * step, _step_decimals(step))
 
 
-def get_margin_usdt() -> float:
+def get_margin_usdt() -> float | None:
+    """★ API실패 시 None 반환(0.0과 구분) — get_borrowed/get_held와 동일 안전패턴.
+    호출부(헬스체크 등)가 "조회실패"와 "진짜 잔고 0"을 구분해야 함."""
     try:
         r = _signed("GET", "/sapi/v1/margin/account")
         if r.status_code == 200:
             for a in r.json().get("userAssets", []):
                 if a["asset"] == "USDT":
                     return float(a["netAsset"])
+            log.error("마진잔고 조회: USDT 자산 없음(응답에 목록 자체가 비정상)")
+            return None
+        # ★ 2026-07-22: 이 분기에 로그가 없어서 07-21 14:34~07-22 09:46(19시간, 228회 연속)
+        #   "IP차단 의심" 알림의 진짜 원인(status/응답본문)을 지금도 규명 못 함 — 재발 방지.
+        log.error(f"마진잔고 조회 실패(status={r.status_code}): {r.text[:300]}")
     except Exception as e:
-        log.error(f"마진잔고 조회실패: {e}")
-    return 0.0
+        log.error(f"마진잔고 조회 예외: {e}")
+    return None
 
 
 def get_margin_level() -> float:
@@ -333,9 +340,12 @@ class MarginGuard:
             return {"error": str(e)}
         fill_qty = float(res.get("executedQty", qty))
         fill_usdt = float(res.get("cummulativeQuoteQty", qty * price))
-        log.warning(f"[{self.engine}] ★마진숏진입 {sym} {fill_qty} (수취 {fill_usdt:.2f} USDT) @~{price:.6g}")
+        # ★ 2026-07-22(감사 발견): 주문 전 조회한 price(호가)가 아니라 실제 평균체결가를 반환해야
+        #   손절(stop_price)·PnL 계산이 정확함 — 6h+40~85%급등 초변동성 코인은 슬리피지가 클 수 있음.
+        fill_price = fill_usdt / fill_qty if fill_qty > 0 else price
+        log.warning(f"[{self.engine}] ★마진숏진입 {sym} {fill_qty} (수취 {fill_usdt:.2f} USDT) @~{fill_price:.6g}(호가{price:.6g})")
         self._ledger("open_short", coin, fill_qty, res)
-        return {"live": True, "qty": fill_qty, "entry_usdt": fill_usdt, "price": price, "result": res}
+        return {"live": True, "qty": fill_qty, "entry_usdt": fill_usdt, "price": fill_price, "result": res}
 
     def close_short(self, coin):
         """마진 숏 청산: 빌린 수량을 시장가 매수 + 자동상환."""
@@ -408,9 +418,11 @@ class MarginGuard:
             return {"error": str(e)}
         fill_qty = float(res.get("executedQty", qty))
         fill_usdt = float(res.get("cummulativeQuoteQty", qty * price))
-        log.warning(f"[{self.engine}] ★마진롱진입 {sym} {fill_qty} (지불 {fill_usdt:.2f} USDT) @~{price:.6g}")
+        # ★ 2026-07-22(감사 발견, open_short와 동일 수정): 호가 대신 실제 평균체결가 반환.
+        fill_price = fill_usdt / fill_qty if fill_qty > 0 else price
+        log.warning(f"[{self.engine}] ★마진롱진입 {sym} {fill_qty} (지불 {fill_usdt:.2f} USDT) @~{fill_price:.6g}(호가{price:.6g})")
         self._ledger("open_long", coin, fill_qty, res)
-        return {"live": True, "qty": fill_qty, "entry_usdt": fill_usdt, "price": price, "result": res}
+        return {"live": True, "qty": fill_qty, "entry_usdt": fill_usdt, "price": fill_price, "result": res}
 
     def close_long(self, coin):
         """마진 롱 청산: 보유 수량을 시장가 매도 + 자동상환(빌린 USDT). close_short과 반대로
