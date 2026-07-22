@@ -1,15 +1,19 @@
 """
 마진 숏 실전 트레이더 (margin_short_trader) — 급등주 되돌림 숏 (바이낸스 크로스마진).
 
-★ 최종 규칙(2026-07-12): 6시간 +40% 급등 → 48시간 숏 (+40% 스탑), 2배.
-   시간대 전수 스위프(2h~72h × 문턱20~60%, 40조합, 날짜클러스터 t) 결과 최적:
-   TEST +38.8%(t4.60), 승률 86%, 2배청산 0%, 4.5건/주. 대출가능 코인만 감시.
-   (이전 24h+40%는 TE +18%/t1.69로 열등 — 짧은 시간대일수록 되돌림이 확실)
+★ 규칙(2026-07-12 확정, 2026-07-22 재검증 후 파라미터만 갱신): LOOKBACK_H시간 +PUMP_PCT% 급등
+   → HOLD_H시간 숏(+STOP_PCT% 스탑), 2배. 현재값: 7h+30%→48h(+40%). 최초 채택은 6h+40%였고
+   2026-07-22에 세밀 재검증(4~8h×30~50% 격자)으로 7h+30%로 교체(신호빈도 약2배, TEST t+3.28) —
+   상세 근거는 파일 상단 상수 정의부(LOOKBACK_H 근처) 주석 참조.
+   (원 스위프: 2h~72h × 문턱20~60%, 날짜클러스터 t — 24h+40%는 TE+18%/t1.69로 열등,
+   짧은 시간대일수록 되돌림이 확실하다는 게 핵심 발견.)
 
 동작:
-  ① 24h 변동률로 1차 스크리닝 → 후보만 5분봉으로 6h 상승률 정밀계산
+  ① 24h 변동률로 1차 스크리닝 → 후보만 5분봉으로 LOOKBACK_H시간 상승률 정밀계산
+     (함수/변수명 pump_6h·ret6h는 최초 6h 버전의 잔재 — 지금은 LOOKBACK_H를 그대로 씀, 이름과
+     실제 시간이 다를 수 있으니 착각 주의)
   ② margin_guard로 크로스마진 숏 진입(증거금 상한 내, 4중 관문)
-  ③ +40% 스탑 또는 48h 만기 시 자동 청산(되사서 상환)
+  ③ STOP_PCT% 스탑 또는 HOLD_H시간 만기 시 자동 청산(되사서 상환)
   ④ 손익 기록.
 
 ★ margin_guard OFF면 자동 dry. 실전은 data/margin_live_config.json arm 필요(현재 arm됨).
@@ -54,13 +58,19 @@ POLL_SEC = 300
 #   짧은 시간대일수록 압도적으로 좋음. 길수록 급격히 악화(24h t1.69 → 48h t0.10 → 72h t0.06).
 #   "짧은 시간에 급하게 오른 것"이 확실히 되돌아옴. 24h+에 걸쳐 서서히 오른 건 진짜 추세일 수 있어 숏이 위험.
 #     24h+40%(이전): 8.2건/주, TE +18.0%(t1.69), 승73%, 청산1%
-#   ★ 6h+40%(채택):  4.5건/주, TE +38.8%(t4.60), 승86%, 청산0%   ← 수익2배·승률+13%p·t 2.7배
-#     4h+40%:        4.0건/주, TE +35.7%(t3.72), 승82%
-#     6h+30%:        8.2건/주, TE +25.5%(t3.50), 승76%  (신호 많이 원하면 대안)
+#     6h+40%(2026-07-12~07-22 실전 사용): 4.5건/주, TE +38.8%(t4.60), 승86%, 청산0%
 # 이전 반성: 2h vs 24h 둘만 비교하고 중간(4~6h)을 안 봐서 24h를 골랐던 것. 사용자가 "24h에 걸 필요 없다" 지적.
-PUMP_PCT = 40.0            # 상승률 문턱
-LOOKBACK_H = 6             # ★ 6시간 상승률 기준
-LOOKBACK = 72              # 6h = 5분봉 72개
+#
+# ★★ 2026-07-22 재검증 — 5x5 세밀 격자(4~8h × 30~50%, 111코인·90일 5분봉, TRAIN60/TEST40).
+#   6h+40%가 견고한 구간(주변 전부 t>1.4로 무너지는 곳 없음) 안에 있음은 재확인. 단 "더 잦은 신호"를
+#   원하는 사용자 요청으로 30% 열(더 헐렁한 문턱)만 놓고 TRAIN t 기준 재선정(사후 TEST편향 없이) →
+#   7h가 최고(TRAIN t+2.79). TEST로 확인: TRAIN n57 t+2.79 → TEST n39 t+3.28(TRAIN보다 오히려 강함,
+#   과최적화 징후 없음). 표본합계 49→96건(약2배), 채택.
+#   ★ 실전 미검증 주의: 위 백테스트는 최근 90일 재구성치라 2026-07-12 원 스위프(더 긴 기간)와 다른
+#   창(window)임 — "6h+40%가 나쁘다"가 아니라 "7h+30%가 최근 창에서 더 낫고 표본도 더 많다"는 것.
+PUMP_PCT = 30.0            # 상승률 문턱 (2026-07-22: 40→30, 신호빈도 증대 목적, TEST t+3.28 확인)
+LOOKBACK_H = 7             # ★ 7시간 상승률 기준 (2026-07-22: 6→7, TRAIN t 기준 재선정)
+LOOKBACK = 84              # 7h = 5분봉 84개 (LOOKBACK_H*12)
 VOL_MULT = 0.0            # 거래량 필터 미사용 (검증 결과 불필요)
 HOLD_H = 48
 STOP_PCT = 40.0           # 진입가 대비 +40% 상승 시 손절(2배 청산선 +50% 안쪽)
@@ -189,7 +199,14 @@ def pump_6h(sym):
 #   실제 감시대상이 백테스트(237코인)의 1/4로 쪼그라들어 있었음 → 신호도 1/4로 줄어드는 구조적 누락.
 #   20만으로 낮추면 204개 감시 = 백테스트와 유사. 체결·슬리피지는 명목 200 USDT 소액이라 문제없음.
 MIN_QUOTE_VOL = 200_000     # 24h 거래대금 최소 20만 USDT
-PRESCREEN_24H = 15.0        # 1차 스크리닝: 24h가 이 미만이면 6h+40%일 리 없음 → klines 조회 절약
+PRESCREEN_24H = 5.0         # 1차 스크리닝: 24h가 이 미만이면 klines 조회 생략(API 절약).
+                            # ★ 2026-07-22(훅 지적으로 실측): "24h 낮으면 pump일 리 없다"는 가정은 거짓
+                            # 케이스가 있음 — 7h+30% 신호 100건 표본 중 24h<15%가 8건(8%), 그중 6건은
+                            # "이미 붕괴 후 반등"형(24h 자체가 -30~-86%인데 최근 7h만 급반등)이라 양수
+                            # 문턱을 아무리 낮춰도 못 잡음(무필터 시에만 잡힘, 즉 사실상 필터 무의미화 필요).
+                            # 15→5로 낮춰 근접 미스(HOME+14%,SLX+9%) 2건만 회수, 잔여 6%는 구조적 사각지대로
+                            # 인지하고 수용(이 패턴은 신규펌프와 다른 성격이라 전략 취지상 배제도 무방할 수
+                            # 있음 — 별도 검증 없이는 포함/배제 어느 쪽도 확정 못 함, 향후 과제).
 
 
 def log_trade(row):
@@ -216,10 +233,10 @@ def main():
     mode = "🔴실전" if (ls["enabled"] and ENGINE in ls["armed"]) else "🔵모의(dry)"
     _bal0 = get_margin_usdt()
     log.info(f"마진숏 트레이더 시작 [{mode}] — 대출가능 {len(UNIVERSE)}코인 + 선물폴백 {len(FUTURES_UNIVERSE)}코인, "
-             f"6h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
+             f"{LOOKBACK_H}h+{PUMP_PCT:.0f}%급등→{HOLD_H}h숏+스탑{STOP_PCT:.0f}% "
              f"| 증거금상한 {ls['global_cap_usdt']}USDT {ls['leverage']}배 | 마진잔고 "
              f"{'조회실패' if _bal0 is None else f'{_bal0:.1f}'}")
-    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — 6h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인+선물폴백")
+    try: notify.send(f"📉 마진숏 트레이더 시작 [{mode}] — {LOOKBACK_H}h+{PUMP_PCT:.0f}% 급등주 숏, 대출가능 {len(UNIVERSE)}코인+선물폴백")
     except Exception: pass
 
     while True:
@@ -313,7 +330,7 @@ def main():
                     #   이 분기가 영원히 막히는 버그가 재발할 수 있음 — 항상 ecap 기준으로 클램프.
                     trade_margin = min(MARGIN_PER_TRADE, ecap)
                     if open_margin + trade_margin > ecap:
-                        log.info(f"진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{trade_margin:.0f}>엔진상한 {ecap}")
+                        log.info(f"진입 보류 {sym}({LOOKBACK_H}h+{ret6h:.0f}%): 누적노출 {open_margin:.0f}+{trade_margin:.0f}>엔진상한 {ecap}")
                         continue
                     # ★ 2026-07-22: get_margin_usdt()(계좌 전체 USDT 순자산)로 min() 클램프하던 걸 제거.
                     #   manuallong 등 타 엔진이 USDT를 정상 차입하면 이 값이 마이너스가 될 수 있는데,
@@ -328,8 +345,8 @@ def main():
                                           "qty": res["qty"], "margin": margin, "venue": "margin",
                                           "pump": round(ret2h,1), "vr": round(vr,1),
                                           "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
-                        log.warning(f"★실전 마진숏 진입 {sym} 6h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
-                        try: notify.send(f"📉 마진숏 진입 {sym} 6h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
+                        log.warning(f"★실전 마진숏 진입 {sym} {LOOKBACK_H}h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
+                        try: notify.send(f"📉 마진숏 진입 {sym} {LOOKBACK_H}h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
                         except Exception: pass
                     else:
                         log.info(f"마진 진입 dry/실패 {sym}: {res}")
@@ -346,7 +363,7 @@ def main():
                     #   핵심 원인). 선물폴백 전용 사이징을 fcap 기준으로 별도 계산.
                     fut_margin = min(MARGIN_PER_TRADE, fcap)
                     if open_fut + fut_margin > fcap:
-                        log.info(f"선물폴백 진입 보류 {sym}(6h+{ret6h:.0f}%): 누적노출 {open_fut:.0f}+{fut_margin:.0f}>엔진상한 {fcap}")
+                        log.info(f"선물폴백 진입 보류 {sym}({LOOKBACK_H}h+{ret6h:.0f}%): 누적노출 {open_fut:.0f}+{fut_margin:.0f}>엔진상한 {fcap}")
                         continue
                     # ★ 2026-07-22: 마진 경로와 동일 이유로 get_futures_usdt() min() 클램프 제거.
                     #   선물지갑은 manuallong과 무관한 별도 지갑이라 마이너스가 될 일은 없지만, API
@@ -360,8 +377,8 @@ def main():
                                           "qty": res["qty"], "margin": margin, "venue": "futures",
                                           "pump": round(ret2h,1), "vr": round(vr,1),
                                           "exit_ts": now + HOLD_H*3600, "entry_iso": datetime.now(KST).isoformat(), "live": True}
-                        log.warning(f"★실전 선물숏 진입(마진대출폴백) {sym} 6h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
-                        try: notify.send(f"📉 선물숏 진입(마진폴백) {sym} 6h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
+                        log.warning(f"★실전 선물숏 진입(마진대출폴백) {sym} {LOOKBACK_H}h+{ret2h:.0f}% 증거금{margin:.0f} → {res['qty']}개")
+                        try: notify.send(f"📉 선물숏 진입(마진폴백) {sym} {LOOKBACK_H}h+{ret2h:.0f}% (증거금{margin:.0f}USDT)")
                         except Exception: pass
                     else:
                         log.info(f"선물 진입 dry/실패 {sym}: {res}")
