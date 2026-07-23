@@ -41,6 +41,7 @@ sys.path.insert(0, str(ROOT))
 import requests
 from bithumb import notify
 from bithumb.margin_guard import MarginGuard, live_status, get_margin_usdt, load_config
+from bithumb.binance_guard import BinanceGuard, load_config as load_futures_config
 
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [RSISHORT] %(message)s",
@@ -58,6 +59,19 @@ COOLDOWN_H = 8
 COST_PCT = 0.20 + 0.12/24*HOLD_H   # 왕복비용 + 대출이자(HOLD_H 반영)
 MIN_QUOTE_VOL_5M = 10_000          # 유동성: 5분봉 거래대금 1만 USDT+ (검증서 이 필터가 오히려 개선)
 MARGIN_PER_TRADE = 30.0            # ★ MARGINAL 판정이라 소액 시작 — 증거금상한과 동일(동시 1건)
+
+# ★ 2026-07-23 선물 폴백 — margin_short_trader의 것과 동일 패턴이지만 트리거 조건은 다름.
+#   mshort는 "코인이 대출가능 목록에 아예 없음"(BANK·ACE류, 영구적)을 유니버스 사전분기로 처리하지만,
+#   RSI숏은 대출가능 목록(uni)에 있는 코인만 스캔하는데도 실행 시점 대출재고가 그새 바닥나 -3045로
+#   실패하는 경우(SHELLUSDT 사례, 일시적)가 있음 — 그래서 사전분기가 아니라 open_short() 실패 시
+#   -3045(대출재고 없음)일 때만 즉시 선물로 재시도하는 방식. FUTURES_ENGINE 미설정/미arm이면 dry.
+#   ★ 미검증 캐비엇: COST_PCT는 마진 대출이자 기준 추정치라 선물 펀딩비(다를 수 있음)를 반영 안 함 —
+#   선물폴백 경로로 체결된 소수 거래는 기록되는 pnl_pct가 실제와 소폭 다를 수 있음. RSI숏이 MARGINAL
+#   판정(n=202)이라 이 서브샘플만 떼어 별도 백테스트할 표본이 안 됨 — mshort의 구조적으로 유사한
+#   폴백 백테스트(TRAIN+2.17%/TEST+4.04%, 마진 대비 낮지만 순양수)에 기대어 판단. 그래서 최초엔
+#   engine_caps_usdt만 등록하고 armed_engines엔 넣지 않음(dry 관찰 후 사용자 승인 시에만 실전 arm —
+#   mshort_fut 롤아웃과 동일 절차).
+FUTURES_ENGINE = "rsishort_fut"
 
 BORROW_PATH = ROOT / "data" / "_borrowable_all.txt"
 POS_PATH = ROOT / "data" / "rsi_short_pos.json"
@@ -138,6 +152,8 @@ def main():
             now = time.time()
             uni = universe() or uni
             guard = MarginGuard(ENGINE)
+            fut_guard = BinanceGuard(FUTURES_ENGINE)
+            fut_caps = load_futures_config().get("engine_caps_usdt", {})
 
             # ★ 2026-07-16 순서변경: 예전엔 신규진입 스캔(코인 200+개, API콜 다수)이 먼저라서
             #   PC재부팅 직후처럼 스캔이 느려지면 이미 만기된 포지션 청산이 몇 분~십여분 지연됐음
@@ -159,21 +175,24 @@ def main():
                     exit_px = px if (px and px > 0) else p["entry_price"]
                     entry = p["entry_price"]
                     is_live = bool(p.get("live"))   # 구형(실전전환 전) 포지션은 live 키 없음 → 모의로 취급(안전)
+                    venue = p.get("venue", "margin")   # ★ 2026-07-23: 선물폴백 포지션은 종목별 가드/설정이 다름
                     if is_live:
-                        cres = guard.close_short(p.get("coin", sym[:-4]))
+                        cres = fut_guard.close_short_futures(p.get("coin", sym[:-4])) if venue == "futures" \
+                               else guard.close_short(p.get("coin", sym[:-4]))
                         # ★margin_short_trader와 동일 수정: 청산 실패 시 로컬에서 지우지 않고 재시도+알림
                         if not cres.get("live"):
                             fails = p.get("close_fails", 0) + 1
                             p["close_fails"] = fails
-                            log.error(f"★청산 실패(포지션 유지, 재시도예정) {sym} → {cres} (연속{fails}회)")
+                            log.error(f"★청산 실패(포지션 유지, 재시도예정) {sym}({venue}) → {cres} (연속{fails}회)")
                             if fails in (1, 3) or fails % 10 == 0:
-                                try: notify.send(f"🚨 RSI극단숏 청산 실패 {sym} → {cres} (연속{fails}회) — 실거래소 포지션 열려있음! 확인 필요")
+                                try: notify.send(f"🚨 RSI극단숏 청산 실패 {sym}({venue}) → {cres} (연속{fails}회) — 실거래소 포지션 열려있음! 확인 필요")
                                 except Exception: pass
                             continue
                     pnl = (1 - exit_px/entry)*100 - COST_PCT
-                    pnl_usdt = p["margin"] * load_config().get("leverage",2) * (pnl/100) if is_live else 0.0
+                    lev = (load_futures_config() if venue == "futures" else load_config()).get("leverage", 2)
+                    pnl_usdt = p["margin"] * lev * (pnl/100) if is_live else 0.0
                     if is_live:
-                        guard.record_realized(pnl_usdt)
+                        (fut_guard if venue == "futures" else guard).record_realized(pnl_usdt)
                     mfe = (1 - p["min_p"]/entry)*100
                     mae = (1 - p["max_p"]/entry)*100
                     log_trade(dict(entry_time=p["entry_iso"], exit_time=datetime.now(KST).isoformat(), symbol=sym,
@@ -182,7 +201,7 @@ def main():
                                    mfe_pct=round(mfe,2), mae_pct=round(mae,2), reason=f"{HOLD_H}h만기"))
                     tag = "★실전" if is_live else "(모의)"
                     pnl_note = f" ({pnl_usdt:+.2f}USDT)" if is_live else ""
-                    log.warning(f"숏 청산{tag} {sym} @{exit_px:g} pnl={pnl:+.2f}%{pnl_note} (최대유리+{mfe:.1f}% 최대역행{mae:+.1f}%)")
+                    log.warning(f"숏 청산{tag}({venue}) {sym} @{exit_px:g} pnl={pnl:+.2f}%{pnl_note} (최대유리+{mfe:.1f}% 최대역행{mae:+.1f}%)")
                     if is_live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
                         try: notify.send(f"📈 RSI극단 숏 청산 {sym} pnl={pnl:+.1f}%{pnl_note}")
                         except Exception: pass
@@ -209,10 +228,11 @@ def main():
                 hit, rsi, vr, px, _ = check_signal(sym)
                 if not hit or px <= 0:
                     continue
-                # 동시노출 상한: 실전 포지션 이미 있으면 신규 실전진입 보류(동시 1건 — 증거금상한이 곧 1건 규모)
-                open_margin = sum(p["margin"] for p in positions.values() if p.get("live"))
-                if open_margin > 0:
-                    log.info(f"진입 보류 {sym}(RSI{rsi:.0f}): 이미 실전포지션 {open_margin:.0f}USDT 열려있음(상한 {MARGIN_PER_TRADE:.0f})")
+                # 동시노출 상한: 실전 포지션 이미 있으면 신규 실전진입 보류(동시 1건 — 증거금상한이 곧 1건
+                # 규모, venue 무관하게 엔진 전체 기준. 마진/선물 두 벌 동시 열리지 않게 방지)
+                open_total = sum(p["margin"] for p in positions.values() if p.get("live"))
+                if open_total > 0:
+                    log.info(f"진입 보류 {sym}(RSI{rsi:.0f}): 이미 실전포지션 {open_total:.0f}USDT 열려있음(상한 {MARGIN_PER_TRADE:.0f})")
                     continue
                 # ★ 2026-07-22: margin_short_trader.py와 동일 버그 수정 — get_margin_usdt()(계좌 전체
                 #   USDT 순자산)로 min() 클램프하던 걸 제거. manuallong 등 타 엔진이 USDT를 정상
@@ -220,16 +240,29 @@ def main():
                 #   (실제로 FILUSDT 신호를 이렇게 놓침). 진짜 잔고부족은 바이낸스가 API에서 거부.
                 margin = MARGIN_PER_TRADE
                 res = guard.open_short(coin, margin)
+                venue = "margin"
+                # ★ 2026-07-23: 마진 대출재고 없음(-3045)일 때만 선물로 즉시 재시도. 다른 실패(가격조회
+                #   실패·최소주문 미달·예외 등)는 선물에서도 똑같이 막힐 가능성이 높아 재시도하지 않음 —
+                #   재고 고갈이라는 구체적 원인이 확인된 경우에만 폴백(막연한 전체 실패 우회 아님).
+                if not res.get("live") and not res.get("dry"):
+                    err = res.get("error")
+                    code = err.get("code") if isinstance(err, dict) else None
+                    if code == -3045 and FUTURES_ENGINE in fut_caps:
+                        fut_margin = min(MARGIN_PER_TRADE, fut_caps[FUTURES_ENGINE])
+                        log.info(f"마진대출 재고부족 {sym} → 선물폴백 시도(증거금{fut_margin:.0f})")
+                        res = fut_guard.open_short_futures(coin, fut_margin)
+                        margin = fut_margin
+                        venue = "futures"
                 cooldown[sym] = now + COOLDOWN_H*3600
                 live = bool(res.get("live"))
                 entry_px = res.get("price", px) if live else px
                 positions[sym] = {"coin": coin, "entry_ts": now, "entry_price": entry_px, "rsi": round(rsi,1), "vr": round(vr,1),
                                   "chg24": round(c24,1), "exit_ts": now + HOLD_H*3600, "margin": margin, "live": live,
-                                  "min_p": entry_px, "max_p": entry_px, "entry_iso": datetime.now(KST).isoformat()}
+                                  "venue": venue, "min_p": entry_px, "max_p": entry_px, "entry_iso": datetime.now(KST).isoformat()}
                 tag = "★실전" if live else "(모의)"
-                log.warning(f"숏 진입{tag} {sym} @{entry_px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
+                log.warning(f"숏 진입{tag}({venue}) {sym} @{entry_px:g} RSI{rsi:.0f} 거래량{vr:.1f}배 24h{c24:+.0f}% → {HOLD_H}h후 청산")
                 if live:   # ★ 실전 체결만 알림 (모의는 로그로만 확인)
-                    try: notify.send(f"📉 RSI극단 숏 진입 {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
+                    try: notify.send(f"📉 RSI극단 숏 진입({venue}) {sym} RSI{rsi:.0f} 거래량{vr:.0f}배 @{entry_px:g}")
                     except Exception: pass
 
             _save(POS_PATH, positions)
