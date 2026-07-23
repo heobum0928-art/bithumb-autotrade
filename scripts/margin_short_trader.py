@@ -181,8 +181,9 @@ def all_tickers():
 
 
 def pump_6h(sym):
-    """6시간 상승률 — 5분봉 73개 조회해 계산. (상승률, 현재가). 실패 시 (None, 0).
-    ★ 6h는 24h와 달리 API가 바로 안 주므로 klines 계산 필요. 후보에만 호출(1차 스크리닝 통과분)."""
+    """LOOKBACK_H시간 상승률 — 5분봉 LOOKBACK+1개 조회해 계산(함수명은 최초 6h 버전 잔재).
+    (상승률, 현재가). 실패 시 (None, 0).
+    ★ 이 시간대는 24h와 달리 API가 바로 안 주므로 klines 계산 필요. 후보에만 호출(1차 스크리닝 통과분)."""
     try:
         r = requests.get(f"{BASE}/api/v3/klines", params={"symbol": sym, "interval": "5m", "limit": LOOKBACK + 1}, timeout=8)
         if r.status_code != 200: return None, 0
@@ -290,8 +291,10 @@ def main():
                     last_capcfg_alert = now
                 engine_caps = None   # 아래 루프에서 신규진입 전부 스킵시킬 신호
 
-            # 1) 신호 탐지 — 6h +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
-            #    1차: 24h 변동률로 후보 추림(6h+40%면 24h도 최소 15%↑) → 2차: 후보만 5분봉으로 6h 정밀계산
+            # 1) 신호 탐지 — LOOKBACK_H시간 +PUMP_PCT% 급등 (거래량 필터 없음: 검증 결과 불필요)
+            #    1차: 24h 변동률로 후보 추림(PRESCREEN_24H, klines 조회 절약용 근사치일 뿐 —
+            #    정확한 하한 보장 아님, 상세는 PRESCREEN_24H 정의부 주석) → 2차: 후보만 5분봉으로
+            #    LOOKBACK_H시간 정밀계산
             # ★ 2026-07-21: 대출가능(UNIVERSE) ∪ 선물상장(FUTURES_UNIVERSE) 전체 스캔.
             #   대출가능하면 마진 우선(경제성 더 좋음, 백테스트 확인), 대출 안 되고 선물만 있으면 폴백.
             UNIVERSE_SET = set(UNIVERSE)
@@ -308,11 +311,11 @@ def main():
                     continue
                 if chg24 < PRESCREEN_24H:      # 1차 스크리닝 (klines 조회 절약)
                     continue
-                ret6h, px6 = pump_6h(sym)      # 2차 정밀 — 6시간 상승률
+                ret6h, px6 = pump_6h(sym)      # 2차 정밀 — LOOKBACK_H시간 상승률
                 if ret6h is None or ret6h < PUMP_PCT:
                     continue
                 if px6 > 0: px = px6
-                ret2h = ret6h   # 기록용(6h 상승률)
+                ret2h = ret6h   # 기록용(LOOKBACK_H시간 상승률)
                 vr = 0.0
 
                 use_margin = coin in UNIVERSE_SET
